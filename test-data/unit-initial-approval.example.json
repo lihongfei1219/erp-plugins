@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "1.0.0",
+  "fixtureId": "unit-initial-approval-example",
+  "fixtureName": "单位首营审批脱敏示例数据",
+  "dataClassification": "synthetic",
+  "notice": "本文件仅包含虚构数据，用于演示和开发测试，不对应任何真实个人或企业。",
+  "erpPayload": {
+    "header": {
+      "referenceYaoshibang": "",
+      "referenceYaobang": "",
+      "unitCode": "",
+      "exists": "",
+      "unitName": "示例医药有限公司",
+      "buyerName": "示例采购员",
+      "businessDivision": "公司本部",
+      "unitShortName": "SLYY",
+      "buyerIdCardNo": "000000000000000000",
+      "companyBankName": "示例银行长春分行",
+      "businessLicenseNo": "91220000EXAMPLE001",
+      "legalRepresentative": "示例法人",
+      "companyTaxNo": "91220000EXAMPLE001",
+      "registeredAddress": "吉林省长春市示例路100号",
+      "companyInvoiceType": "专用发票",
+      "selfPickupName": "示例提货人",
+      "warehouseAddress": "吉林省长春市示例路200号",
+      "companyAccountName": "示例医药有限公司",
+      "selfPickupIdCardNo": "000000000000000000",
+      "unitPhone": "0431-00000000",
+      "companyBankAccount": "0000000000000000000",
+      "siteInspectionStatus": "示例数据：待核验",
+      "qualityResponsiblePerson": "示例质量负责人",
+      "unitType": "批发企业",
+      "invoiceContactPhone": "13800000000",
+      "enterpriseResponsiblePerson": "示例企业负责人",
+      "receivingPerson": "示例收货人",
+      "receivingPhone": "13800000000",
+      "receivingAddress": "吉林省长春市示例路200号"
+    },
+    "qualificationRows": [
+      {
+        "dataType": "营业执照",
+        "certificateNo": "91220000EXAMPLE001",
+        "issuingAuthority": "示例市场监督管理局",
+        "issueDate": "2024-01-01",
+        "expiryDate": null,
+        "expiryControl": false
+      },
+      {
+        "dataType": "药品经营许可证",
+        "certificateNo": "吉AA0000000",
+        "issuingAuthority": "示例药品监督管理局",
+        "issueDate": "2024-01-01",
+        "expiryDate": "2029-01-01",
+        "expiryControl": true
+      },
+      {
+        "dataType": "预包装食品保健食品备案",
+        "certificateNo": "YB22200000000000",
+        "issuingAuthority": "示例市场监督管理局",
+        "issueDate": "2024-01-01",
+        "expiryDate": null,
+        "expiryControl": false
+      },
+      {
+        "dataType": "第二类医疗器械经营备案凭证",
+        "certificateNo": "吉长药监械经营备00000号",
+        "issuingAuthority": "示例市场监督管理局",
+        "issueDate": "2024-01-01",
+        "expiryDate": null,
+        "expiryControl": false
+      }
+    ]
+  },
+  "rawExtractedData": {
+    "drugBusinessLicense": {
+      "businessScope": [
+        "中成药",
+        "化学药制剂",
+        "抗生素"
+      ]
+    }
+  }
+}
