@@ -6,11 +6,21 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "test:qwen-ocr": "node scripts/test-qwen-ocr.mjs",
+    "test:bailian-models": "node scripts/test-qwen-ocr.mjs",
+    "test:qwen-ocr:prompt": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-qwen-ocr.ps1",
+    "test:bailian-models:prompt": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-qwen-ocr.ps1",
+    "test:ocr-recovery": "node --experimental-strip-types --test scripts/ocr-recovery.test.mjs",
+    "test:incremental-extraction": "esbuild scripts/incremental-extraction.test.ts --bundle --platform=node --format=esm --outfile=tmp/incremental-extraction.test.mjs && node --test tmp/incremental-extraction.test.mjs",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "build": "npm run typecheck && electron-vite build",
     "start": "electron-vite preview"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "0.84.3",
+    "@earendil-works/pi-ai": "0.84.3",
+    "@napi-rs/canvas": "1.0.8",
+    "pdfjs-dist": "6.2.108",
     "vue": "^3.5.41"
   },
   "devDependencies": {

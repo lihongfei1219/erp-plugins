@@ -1,13 +1,15 @@
 import mockFixture from '../../test-data/unit-initial-approval.example.json'
 import type { ErpAutofillResult } from '../shared/erp'
+import type { UnitInitialApprovalExtraction, UnitInitialApprovalHeader } from '../shared/ocr'
 
 interface QualificationRow {
   dataType: string
-  certificateNo: string
-  issuingAuthority: string
-  issueDate: string
+  certificateNo: string | null
+  issuingAuthority: string | null
+  issueDate: string | null
   expiryDate: string | null
   expiryControl: boolean
+  materialProvided?: boolean
 }
 
 interface AutofillPayload {
@@ -55,9 +57,10 @@ function mapInvoiceType(value: string | null): string | null {
   return value
 }
 
-function buildAutofillPayload(): AutofillPayload {
-  const sourceHeader = mockFixture.erpPayload.header
-  const qualificationRows = mockFixture.erpPayload.qualificationRows as QualificationRow[]
+function buildAutofillPayload(
+  sourceHeader: UnitInitialApprovalHeader,
+  qualificationRows: QualificationRow[]
+): AutofillPayload {
   const expiringQualifications = qualificationRows.filter((row) => row.expiryDate)
   const earliestExpiryDate = expiringQualifications
     .map((row) => row.expiryDate as string)
@@ -82,7 +85,7 @@ function buildAutofillPayload(): AutofillPayload {
     ZTRSFZH: sourceHeader.selfPickupIdCardNo,
     ZZDQRQ: earliestExpiryDate,
     ZZDQTX: expiringQualifications.some((row) => row.expiryControl) ? '是' : '否',
-    JYFW: mockFixture.rawExtractedData.drugBusinessLicense.businessScope.join(','),
+    JYFW: sourceHeader.businessScope.join(','),
     SDKCQK: sourceHeader.siteInspectionStatus,
     DWFDDBR: sourceHeader.legalRepresentative,
     DWZLFZR: sourceHeader.qualityResponsiblePerson,
@@ -99,7 +102,32 @@ function buildAutofillPayload(): AutofillPayload {
     })
   )
 
-  return { header, qualificationRows }
+  return {
+    header,
+    qualificationRows: qualificationRows
+      .filter((row) => row.dataType.length > 0)
+      .map((row) => ({
+        ...row,
+        certificateNo: row.certificateNo ?? '',
+        issuingAuthority: row.issuingAuthority ?? '',
+        issueDate: row.issueDate ?? ''
+      })) as Array<QualificationRow & {
+      certificateNo: string
+      issuingAuthority: string
+      issueDate: string
+    }>
+  }
+}
+
+function buildMockPayload(): AutofillPayload {
+  const header = {
+    ...mockFixture.erpPayload.header,
+    businessScope: mockFixture.rawExtractedData.drugBusinessLicense.businessScope
+  } as unknown as UnitInitialApprovalHeader
+  return buildAutofillPayload(
+    header,
+    mockFixture.erpPayload.qualificationRows as QualificationRow[]
+  )
 }
 
 async function runAutofillInErpPage(payload: AutofillPayload): Promise<PageAutofillResult> {
@@ -184,12 +212,12 @@ async function runAutofillInErpPage(payload: AutofillPayload): Promise<PageAutof
 
   const gridFieldMap: Record<string, (row: QualificationRow) => string> = {
     ZLLX: (row) => row.dataType,
-    ZSBH: (row) => row.certificateNo,
-    FZJG: (row) => row.issuingAuthority,
-    FZRQ: (row) => row.issueDate,
+    ZSBH: (row) => row.certificateNo ?? '',
+    FZJG: (row) => row.issuingAuthority ?? '',
+    FZRQ: (row) => row.issueDate ?? '',
     DQRQ: (row) => row.expiryDate ?? '',
     DQKZ: (row) => (row.expiryControl ? '是' : '否'),
-    ZLTG: () => '是'
+    ZLTG: (row) => (row.materialProvided === false ? '否' : '是')
   }
 
   let filledQualificationRows = 0
@@ -228,11 +256,18 @@ async function runAutofillInErpPage(payload: AutofillPayload): Promise<PageAutof
 }
 
 export function getMockAutofillPayload(): AutofillPayload {
-  return buildAutofillPayload()
+  return buildMockPayload()
 }
 
 export function buildMockAutofillScript(): string {
-  return `(${runAutofillInErpPage.toString()})(${JSON.stringify(buildAutofillPayload())})`
+  return `(${runAutofillInErpPage.toString()})(${JSON.stringify(buildMockPayload())})`
+}
+
+export function buildExtractedAutofillScript(
+  extraction: UnitInitialApprovalExtraction
+): string {
+  const payload = buildAutofillPayload(extraction.header, extraction.qualificationRows)
+  return `(${runAutofillInErpPage.toString()})(${JSON.stringify(payload)})`
 }
 
 export function createAutofillFailure(

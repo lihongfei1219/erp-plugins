@@ -1,7 +1,12 @@
 import { BrowserWindow, WebContentsView } from 'electron'
 import type { ErpConfig } from './erp-config'
-import { buildMockAutofillScript, createAutofillFailure } from './erp-autofill'
+import {
+  buildExtractedAutofillScript,
+  buildMockAutofillScript,
+  createAutofillFailure
+} from './erp-autofill'
 import type { ErpAutofillResult, ErpState } from '../shared/erp'
+import type { UnitInitialApprovalExtraction } from '../shared/ocr'
 
 const TOOLBAR_HEIGHT = 64
 const SIDEBAR_WIDTH = 360
@@ -77,7 +82,29 @@ export class ErpViewController {
     this.view?.webContents.reload()
   }
 
+  setVisible(visible: boolean): void {
+    if (!this.view || this.view.webContents.isDestroyed()) {
+      return
+    }
+
+    if (visible) {
+      this.updateBounds()
+    }
+
+    this.view.setVisible(visible)
+  }
+
   async fillMockData(): Promise<ErpAutofillResult> {
+    return this.fillWithScript(buildMockAutofillScript())
+  }
+
+  async fillExtractedData(
+    extraction: UnitInitialApprovalExtraction
+  ): Promise<ErpAutofillResult> {
+    return this.fillWithScript(buildExtractedAutofillScript(extraction))
+  }
+
+  private async fillWithScript(script: string): Promise<ErpAutofillResult> {
     if (!this.view || this.view.webContents.isDestroyed()) {
       return createAutofillFailure('unavailable', 'ERP 页面尚未加载')
     }
@@ -115,7 +142,7 @@ export class ErpViewController {
       }
 
       const result = (await editorFrame.executeJavaScript(
-        buildMockAutofillScript(),
+        script,
         true
       )) as {
         filledHeaderFields?: unknown

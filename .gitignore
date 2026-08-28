@@ -10,10 +10,18 @@ dist/
 Thumbs.db
 .DS_Store
 
-# Local ERP documents and extracted production data may contain personal or company secrets.
+# Local source documents can contain company and personal data.
 *.pdf
+
 test-data/bojin-unit-initial-approval.json
 test-data/*.local.json
 
 # Temporary inspection and verification artifacts.
 tmp/
+
+# Local development tool caches.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
