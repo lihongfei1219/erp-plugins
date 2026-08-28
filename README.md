@@ -14,6 +14,8 @@
 - 上传前在本地生成可放大的逐页预览，由用户排除身份证、护照、银行卡等高敏页面；被排除页不会调用任何模型。
 - 使用 `@earendil-works/pi-ai` 注册 OpenAI 兼容的 Qwen OCR 与字段标准化模型。
 - 每个并发页面请求使用隔离的 `@earendil-works/pi-agent-core` Agent 会话。
+- 单页 OCR 完成后立即调用字段标准化模型，确定性校验通过后合并到累计结果并自动增量代填 ERP。
+- 默认使用 8 路页面并发，所有用户保留页都会处理完成；并发结果按页码和字段证据合并。
 - Agent 只暴露 `submit_unit_initial_approval` 业务工具，不具备 Shell、任意文件写入、数据库写入或 ERP 自动保存能力。
 - 按 [`config/erp/unit-initial-approval.fields.json`](config/erp/unit-initial-approval.fields.json) 整理 32 个主表字段和 7 个资质明细字段。
 - 对日期、页码、重复证照、敏感字段和关键缺失字段执行程序规则校验。
@@ -32,20 +34,29 @@ Electron 主进程
   ├─ 仅将保留页转为 OCR JPEG
   └─ Pi Agent 并发页面流水线
        ├─ Qwen OCR：默认 8 路并发识别
-       ├─ 单页完成后立即标准化、合并并增量代填
-       └─ submit_unit_initial_approval：受 Schema 约束的唯一工具
+       ├─ 单页字段标准化：调用 submit_unit_initial_approval
+       ├─ TypeScript 规则校验与跨页累计合并
+       └─ 串行增量代填 ERP，避免并发修改同一表单
         │
         ▼
-TypeScript 程序规则校验
+全部用户保留页处理完成
         │
         ▼
-用户核对并点击代填
-        │
-        ▼
-ERP 当前新建页（不自动保存）
+用户核对 ERP 当前新建页并手动保存
 ```
 
 “不需要后台服务”表示不再维护本项目自己的 OCR Web 服务，并不代表完全离线。PDF 预览和转页在本机完成；用户保留的页面图片与对应 OCR 文本会发送到配置的模型接口，用户排除的页面不会发送。若所有业务资料都不能离开内网，应将两个模型接口部署在内网，或切换回完整本地方案。
+
+## 并发与自动代填行为
+
+- `MAIN_VITE_PI_OCR_CONCURRENCY` 控制同时运行的页面流水线数量，默认值为 `8`。
+- PDF 页面渲染按顺序排队；渲染完成的页面会立即进入并发 OCR，避免同一 PDF 文档并发重绘造成资源竞争。
+- 每个页面独立执行 OCR 和字段标准化，完成顺序可能与页码不同；累计结果会按字段证据和资质唯一键合并。
+- ERP 代填按完成顺序串行执行，避免多个页面同时修改同一表单。
+- 系统不会按字段覆盖率提前结束；所有用户保留页都会识别完成。
+- 自动代填只修改当前“单位首营审批”新建页，不会点击保存、提交或审批按钮。
+
+开始识别前应先进入一个空白的“单位首营审批”新建页。识别期间不建议手工修改正在自动填充的字段；全部页面完成后，再对照原件核验并手动保存。
 
 ## 环境要求
 
@@ -157,9 +168,11 @@ src/
 │  ├─ agent/
 │  │  ├─ config.ts                       # Pi 运行时配置
 │  │  ├─ document-images.ts              # PDF/图片本地预处理
+│  │  ├─ incremental-extraction.ts       # 跨页字段合并与覆盖率统计
 │  │  ├─ model-registry.ts               # Pi 模型与 Provider 注册
-│  │  ├─ pi-document-client.ts            # 文档 Agent 编排
+│  │  ├─ pi-document-client.ts            # 并发页面流水线与增量代填编排
 │  │  └─ unit-initial-approval-tool.ts    # 字段 Schema、提交工具与规则校验
+│  ├─ document-extraction-client.ts       # 文档提取接口与增量更新类型
 │  ├─ extraction-client-factory.ts        # Pi 文档客户端初始化与配置错误隔离
 │  ├─ page-selection.ts                   # 排除页码校验
 │  ├─ erp-autofill.ts                     # ERP DOM 与网格代填
@@ -183,9 +196,11 @@ npm run build
 # OCR 重复结束原因与排除页码单元测试
 npm run test:ocr-recovery
 
+# 跨页字段合并与覆盖率统计单元测试
+npm run test:incremental-extraction
+
 # 安全输入一个百炼 Key，依次验证 Qwen OCR 与 DeepSeek Function Calling
 npm run test:bailian-models:prompt
-
 ```
 
 ## 安全边界
@@ -196,7 +211,7 @@ npm run test:bailian-models:prompt
 - 页面预览只在本机生成，被用户排除的页面不会调用 Qwen OCR，也不会进入字段标准化模型。
 - Pi Agent 不暴露 Shell、任意文件读写、数据库写入、浏览器操作或 ERP 保存工具。
 - Agent 的唯一业务工具只接收受 TypeBox Schema 约束的首营字段。
-- ERP 代填必须由用户点击触发，代填后仍须人工核验和手动保存。
+- ERP 增量代填由用户点击“开始识别”触发，代填后仍须人工核验和手动保存。
 - `.env`、原始 PDF、真实业务 JSON、模型缓存和临时文件已在 `.gitignore` 中忽略。
 - 使用外部模型接口会传输业务资料；生产部署前必须确认数据驻留、日志保留和供应商合规要求。
 
