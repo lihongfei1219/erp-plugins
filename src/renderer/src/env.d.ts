@@ -1,8 +1,15 @@
 /// <reference types="vite/client" />
 
-import type { ErpAutofillResult, ErpState } from '../../shared/erp'
 import type {
+  ErpAutofillResult,
+  ErpBusinessRequest,
+  ErpFillSessionRequest,
+  ErpState
+} from '../../shared/erp'
+import type {
+  OcrCancelRequest,
   OcrClientResult,
+  OcrDocumentSelectionRequest,
   OcrDocumentPreview,
   OcrExtractionRequest,
   OcrPreviewResult,
@@ -16,13 +23,15 @@ interface DesktopApi {
     goBack: () => Promise<void>
     goForward: () => Promise<void>
     reload: () => Promise<void>
-    fillMockData: () => Promise<ErpAutofillResult>
+    setAssistantWidth: (width: number) => Promise<void>
+    fillFixture: (request: ErpBusinessRequest) => Promise<ErpAutofillResult>
+    fillSession: (request: ErpFillSessionRequest) => Promise<ErpAutofillResult>
     onStateChanged: (listener: (state: ErpState) => void) => void
   }
   readonly ocr: {
-    selectDocument: () => Promise<OcrPreviewResult>
+    selectDocument: (request: OcrDocumentSelectionRequest) => Promise<OcrPreviewResult>
     extractDocument: (request: OcrExtractionRequest) => Promise<OcrClientResult>
-    cancelDocument: (token: OcrDocumentPreview['token']) => Promise<void>
+    cancelDocument: (request: OcrCancelRequest) => Promise<void>
     onProgress: (listener: (progress: OcrProgress) => void) => void
   }
 }

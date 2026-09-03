@@ -1,0 +1,143 @@
+{
+  "schemaVersion": "1.0.0",
+  "fixtureId": "purchase-order-sales-outbound-sckgak000007111",
+  "fixtureName": "采购订单-销售出库清单测试数据",
+  "documentType": "purchase-order",
+  "sourceType": "user-provided-image",
+  "dataClassification": "user-provided-test-data",
+  "notice": "数据来自用户提供的销售出库清单图片。四个印刷明细行按原始顺序分别代填，即使商品和单价相同也不合并。代填测试不得自动保存或提交。",
+  "pageIdentity": {
+    "ename": "CGDD",
+    "cname": "采购订单",
+    "mode": "Add"
+  },
+  "erpPayload": {
+    "header": {
+      "supplierName": "江西康强医药有限公司",
+      "sourceOrderNumber": "SCKGAK000007111",
+      "invoiceDate": "2026-08-11",
+      "departureDate": "2026-08-11",
+      "customerName": "吉林柏锦医药有限公司",
+      "receivingAddress": "长春市二道区东河东路与英俊西街交汇，英俊西街1333号2栋4号库",
+      "carrierName": "江西仁济医药有限公司",
+      "transportMethod": null,
+      "coldChain": null,
+      "transportTimeLimit": null,
+      "receiptRemark": null,
+      "remark": "来源销售出库清单：SCKGAK000007111",
+      "paymentMethod": null,
+      "groupName": null
+    },
+    "items": [
+      {
+        "productName": "健胃消食片",
+        "specification": "0.8g*8片*4板/盒",
+        "dosageForm": "片剂",
+        "manufacturer": "修正药业集团股份有限公司",
+        "origin": "通化市修正路36号",
+        "approvalNumber": "国药准字Z20063187",
+        "marketingAuthorizationHolder": "修正药业集团股份有限公司",
+        "unit": "盒",
+        "packageQuantity": 300,
+        "batchNumber": "251103",
+        "quantity": 17100,
+        "taxIncludedUnitPrice": 4.221,
+        "taxIncludedAmount": 72179.1,
+        "productionDate": "2025-11-08",
+        "expiryDate": "2027-10-31",
+        "qualityStatus": "合格",
+        "sourcePages": [1]
+      },
+      {
+        "productName": "健胃消食片",
+        "specification": "0.8g*8片*4板/盒",
+        "dosageForm": "片剂",
+        "manufacturer": "修正药业集团股份有限公司",
+        "origin": "通化市修正路36号",
+        "approvalNumber": "国药准字Z20063187",
+        "marketingAuthorizationHolder": "修正药业集团股份有限公司",
+        "unit": "盒",
+        "packageQuantity": 300,
+        "batchNumber": "251202",
+        "quantity": 120,
+        "taxIncludedUnitPrice": 4.221,
+        "taxIncludedAmount": 506.52,
+        "productionDate": "2025-12-05",
+        "expiryDate": "2027-11-30",
+        "qualityStatus": "合格",
+        "sourcePages": [1]
+      },
+      {
+        "productName": "健胃消食片",
+        "specification": "0.8g*8片*4板/盒",
+        "dosageForm": "片剂",
+        "manufacturer": "修正药业集团股份有限公司",
+        "origin": "通化市修正路36号",
+        "approvalNumber": "国药准字Z20063187",
+        "marketingAuthorizationHolder": "修正药业集团股份有限公司",
+        "unit": "盒",
+        "packageQuantity": 300,
+        "batchNumber": "251203",
+        "quantity": 180,
+        "taxIncludedUnitPrice": 4.221,
+        "taxIncludedAmount": 759.78,
+        "productionDate": "2025-12-05",
+        "expiryDate": "2027-11-30",
+        "qualityStatus": "合格",
+        "sourcePages": [1]
+      },
+      {
+        "productName": "健胃消食片",
+        "specification": "0.8g*8片*4板/盒",
+        "dosageForm": "片剂",
+        "manufacturer": "修正药业集团股份有限公司",
+        "origin": "通化市修正路36号",
+        "approvalNumber": "国药准字Z20063187",
+        "marketingAuthorizationHolder": "修正药业集团股份有限公司",
+        "unit": "盒",
+        "packageQuantity": 300,
+        "batchNumber": "251203",
+        "quantity": 12600,
+        "taxIncludedUnitPrice": 4.221,
+        "taxIncludedAmount": 53184.6,
+        "productionDate": "2025-12-05",
+        "expiryDate": "2027-11-30",
+        "qualityStatus": "合格",
+        "sourcePages": [1]
+      }
+    ]
+  },
+  "rawDocument": {
+    "title": "江西康强医药有限公司销售出库清单（出库单*代合同）",
+    "sourceOrderNumber": "SCKGAK000007111",
+    "logisticsEntrustedThirdParty": "江西仁济医药有限公司",
+    "seller": "江西康强医药有限公司",
+    "customer": "吉林柏锦医药有限公司",
+    "invoiceDate": "2026-08-11",
+    "departureDate": "2026-08-11",
+    "rows": [
+      { "batchNumber": "251103", "quantity": 17100, "unitPrice": 4.221, "amount": 72179.1, "productionDate": "2025-11-08", "expiryDate": "2027-10-31", "qualityStatus": "合格" },
+      { "batchNumber": "251202", "quantity": 120, "unitPrice": 4.221, "amount": 506.52, "productionDate": "2025-12-05", "expiryDate": "2027-11-30", "qualityStatus": "合格" },
+      { "batchNumber": "251203", "quantity": 180, "unitPrice": 4.221, "amount": 759.78, "productionDate": "2025-12-05", "expiryDate": "2027-11-30", "qualityStatus": "合格" },
+      { "batchNumber": "251203", "quantity": 12600, "unitPrice": 4.221, "amount": 53184.6, "productionDate": "2025-12-05", "expiryDate": "2027-11-30", "qualityStatus": "合格" }
+    ],
+    "totalQuantity": 30000,
+    "totalAmount": 126630,
+    "currency": "CNY"
+  },
+  "autofillPolicy": {
+    "neverSaveAutomatically": true,
+    "supplierSelectionMode": "erp-reference-exact-match",
+    "productSelectionMode": "erp-reference-score-by-name-specification-manufacturer-approval-number",
+    "writableItemKeys": ["productName", "quantity", "taxIncludedUnitPrice"],
+    "erpDerivedItemKeys": ["taxIncludedAmount", "specification", "manufacturer", "unit", "productNumber", "taxExcludedUnitPrice", "taxExcludedAmount"],
+    "evidenceOnlyItemKeys": ["batchNumber", "productionDate", "expiryDate", "qualityStatus"],
+    "manualRequiredKeys": ["paymentMethod"]
+  },
+  "reviewRequired": [
+    "图片显示的客户名称是收货方，ERP 采购订单的单位名称应选择销售方江西康强医药有限公司。",
+    "四个印刷明细行按票据顺序分别录入：数量为 17100、120、180、12600，不进行汇总。",
+    "付款方式未在票据中出现，必须由采购人员在 ERP 中手动选择。",
+    "承运单位需要在 ERP 参照中匹配江西仁济医药有限公司；匹配不到时保留 ERP 默认值。"
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "1.0.0",
+  "businessId": "purchase-order",
+  "page": {
+    "module": "采购业务管理",
+    "name": "采购订单管理",
+    "ename": "CGDD",
+    "cname": "采购订单",
+    "mode": "Add",
+    "requiredElementIds": ["DWMC", "QYRQ", "FKFS"],
+    "requiredGridFields": ["SPMC", "SL", "DJ"]
+  },
+  "headerFields": [
+    { "key": "supplierName", "label": "单位名称", "erpElementId": "DWMC", "required": true, "controlType": "reference", "editability": "erp-reference", "source": "ocr-match" },
+    { "key": "coldChain", "label": "冷藏商品", "erpElementId": "LCSP", "required": false, "controlType": "select", "options": ["是", "否"], "editability": "editable", "source": "ocr-or-default" },
+    { "key": "departureDate", "label": "启运日期", "erpElementId": "QYRQ", "required": true, "controlType": "date", "editability": "editable", "source": "ocr-or-default" },
+    { "key": "carrierName", "label": "承运单位", "erpElementId": "CYDW", "required": false, "controlType": "reference", "editability": "erp-reference", "source": "ocr-or-default" },
+    { "key": "transportMethod", "label": "承运方式", "erpElementId": "CYFS", "required": false, "controlType": "reference", "editability": "erp-reference", "source": "ocr-or-default" },
+    { "key": "transportTimeLimit", "label": "运输时限", "erpElementId": "YSSX", "required": false, "controlType": "number", "editability": "editable", "source": "ocr" },
+    { "key": "receiptRemark", "label": "收货备注", "erpElementId": "SHBZ", "required": false, "controlType": "textarea", "editability": "editable", "source": "ocr-or-user" },
+    { "key": "remark", "label": "备注", "erpElementId": "BZ", "required": false, "controlType": "textarea", "editability": "editable", "source": "ocr-or-user" },
+    { "key": "groupName", "label": "分组", "erpElementId": "FZ", "required": false, "controlType": "input", "editability": "editable", "source": "ocr-or-default" },
+    { "key": "paymentMethod", "label": "付款方式", "erpElementId": "FKFS", "required": true, "controlType": "select", "options": ["款到发货", "货到付款"], "editability": "editable", "source": "document-or-user" }
+  ],
+  "derivedHeaderFields": [
+    { "label": "含税总额", "erpElementId": "ZJE" },
+    { "label": "无税总额", "erpElementId": "WSZJE" },
+    { "label": "总数量", "erpElementId": "ZSL" },
+    { "label": "单据编号", "erpElementId": "DJBH" },
+    { "label": "单位编号", "erpElementId": "DWBH" }
+  ],
+  "detailGrid": {
+    "erpController": "gridEditBody",
+    "selectionMode": "erp-product-reference",
+    "sourceRowPolicy": "preserve-every-printed-row",
+    "writableFields": [
+      { "key": "productName", "label": "商品名称", "erpCellName": "SPMC", "required": true, "validation": "non-empty", "editability": "erp-reference", "source": "ocr-match" },
+      { "key": "quantity", "label": "数量", "erpCellName": "SL", "required": true, "validation": "greater-than-zero", "editability": "editable-formula-trigger", "source": "ocr-row" },
+      { "key": "taxIncludedUnitPrice", "label": "含税单价", "erpCellName": "DJ", "required": true, "validation": "greater-than-zero", "editability": "editable-formula-trigger", "source": "ocr" }
+    ],
+    "erpDerivedFields": [
+      { "key": "taxIncludedAmount", "label": "含税金额", "erpCellName": "JE" },
+      { "key": "productNumber", "label": "商品编号", "erpCellName": "SPBH" },
+      { "key": "specification", "label": "规格", "erpCellName": "GG" },
+      { "key": "manufacturer", "label": "生产厂商", "erpCellName": "SCCS" },
+      { "key": "unit", "label": "单位", "erpCellName": "DW" },
+      { "key": "dosageForm", "label": "剂型", "erpCellName": "JX" },
+      { "key": "origin", "label": "产地", "erpCellName": "CD" },
+      { "key": "marketingAuthorizationHolder", "label": "上市许可持有人", "erpCellName": "SSXKCYR" },
+      { "key": "taxExcludedUnitPrice", "label": "无税单价", "erpCellName": "WSDJ" },
+      { "key": "taxExcludedAmount", "label": "无税金额", "erpCellName": "WSJE" }
+    ],
+    "evidenceOnlyFields": ["batchNumber", "productionDate", "expiryDate", "qualityStatus", "approvalNumber"]
+  },
+  "autofillOrder": [
+    "supplier-reference",
+    "header-fields",
+    "product-reference",
+    "quantity",
+    "tax-included-unit-price",
+    "erp-formula-verification"
+  ],
+  "neverSaveAutomatically": true
+}

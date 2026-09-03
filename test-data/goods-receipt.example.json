@@ -1,0 +1,148 @@
+{
+  "schemaVersion": "1.0.0",
+  "fixtureId": "goods-receipt-sales-delivery-note-202608110034",
+  "fixtureName": "商品收货管理-随货同行单测试数据",
+  "documentType": "goods-receipt",
+  "sourceType": "user-provided-image",
+  "dataClassification": "user-provided-test-data",
+  "notice": "数据来自用户明确指定为测试数据的随货同行单图片。图片中文字较小的字段已标记为需要复核；代填测试不得自动保存或审核 ERP 单据。",
+  "pageIdentity": {
+    "ename": "SPSHDJ",
+    "cname": "商品收货登记",
+    "mode": "Add"
+  },
+  "erpPayload": {
+    "header": {
+      "supplierName": "吉林省信茂药业有限公司",
+      "departureDate": "2026-08-11",
+      "carrierName": null,
+      "transportMethod": null,
+      "receiptDateTime": null,
+      "surfaceTemperature": null,
+      "transportProcessTemperatureStatus": null,
+      "transportVehicle": null,
+      "departurePlace": null,
+      "departureDateTime": null,
+      "receiptDateTimeDetail": null,
+      "actualTransportHours": null,
+      "receiptRemark": "随货同行单号：202608110034",
+      "goodsAccountConsistency": null,
+      "deliveryNoteCompliance": null,
+      "enclosedVehicle": null,
+      "logisticsVoucherCompliance": null,
+      "transportTimeLimitStatus": null
+    },
+    "items": [
+      {
+        "productName": "咳特灵胶囊",
+        "specification": "（360mg:1.4mg）10粒×2板/盒",
+        "manufacturer": "广西修正制药有限公司",
+        "marketingAuthorizationHolder": "广西修正制药有限公司",
+        "unit": "盒",
+        "packageQuantity": 400,
+        "arrivalQuantity": 400,
+        "receiptQuantity": 400,
+        "unitPrice": 3.18,
+        "amount": 1272,
+        "batchNumber": "260209",
+        "productionDate": "2026-02-05",
+        "expiryDate": "2029-01-31",
+        "approvalNumber": "国药准字Z22023418",
+        "dosageForm": "胶囊剂",
+        "pieceRatio": 1,
+        "remark": null
+      },
+      {
+        "productName": "咽炎片",
+        "specification": "12片×3板/盒",
+        "manufacturer": "通药制药集团股份有限公司",
+        "marketingAuthorizationHolder": "通药制药集团股份有限公司",
+        "unit": "盒",
+        "packageQuantity": 240,
+        "arrivalQuantity": 240,
+        "receiptQuantity": 240,
+        "unitPrice": 4.12,
+        "amount": 988.8,
+        "batchNumber": "260316",
+        "productionDate": "2026-03-24",
+        "expiryDate": "2029-02-28",
+        "approvalNumber": "国药准字Z22024521",
+        "dosageForm": "片剂",
+        "pieceRatio": 1,
+        "remark": null
+      }
+    ]
+  },
+  "rawDocument": {
+    "title": "吉林省信茂药业有限公司销售出库单（随货同行单）",
+    "documentNumber": "202608110034",
+    "shippingDate": "2026-08-11",
+    "salesDate": "2026-08-11",
+    "region": "吉林省-长春市-二道区",
+    "seller": {
+      "name": "吉林省信茂药业有限公司",
+      "contactName": "张洛硕",
+      "contactPhone": "15134485191"
+    },
+    "receiver": {
+      "name": "吉林柏锦医药有限公司",
+      "address": "长春市二道区东河东路与英俊西街交汇，英俊西街1333号2栋4号库"
+    },
+    "totals": {
+      "salesAmountUppercase": "贰仟贰佰陆拾元捌角整",
+      "salesAmount": 2260.8,
+      "discountAmount": 0,
+      "amountAfterDiscount": 2260.8,
+      "currency": "CNY"
+    },
+    "staff": {
+      "reviewer": "王海跃",
+      "warehouseKeeper": "任鑫林",
+      "invoiceClerk": "郭静"
+    },
+    "afterSalesPhone": "18022531400",
+    "remark": null
+  },
+  "autofillPolicy": {
+    "neverSaveAutomatically": true,
+    "testModeBehavior": "测试按钮允许新增空白商品行并写入展示字段，但数据不包含 ERP 内部商品和采购订单标识，禁止直接保存。",
+    "supplierSelectionMode": "erp-reference-lookup",
+    "productSelectionMode": "match-existing-order-lines",
+    "directlyWritableHeaderKeys": [
+      "departureDate",
+      "receiptRemark"
+    ],
+    "directlyWritableItemKeys": [
+      "arrivalQuantity",
+      "receiptQuantity",
+      "remark"
+    ],
+    "evidenceOnlyItemKeys": [
+      "specification",
+      "manufacturer",
+      "marketingAuthorizationHolder",
+      "unit",
+      "unitPrice",
+      "amount",
+      "batchNumber",
+      "productionDate",
+      "expiryDate",
+      "approvalNumber",
+      "dosageForm"
+    ],
+    "manualDecisionKeys": [
+      "goodsAccountConsistency",
+      "deliveryNoteCompliance",
+      "enclosedVehicle",
+      "logisticsVoucherCompliance",
+      "transportProcessTemperatureStatus",
+      "transportTimeLimitStatus"
+    ]
+  },
+  "reviewRequired": [
+    "图片分辨率有限，请用原始票据复核联系人姓名、详细收货地址以及经手人姓名。",
+    "请复核两项商品的规格、生产企业和上市许可持有人文字。",
+    "销售日期不能直接当作实际收货日期；实际收货时间和温度应由现场人员填写。",
+    "票据中的批号、生产日期和有效期目前在该 ERP 收货页面为隐藏或只读字段，仅作为匹配和复核证据。"
+  ]
+}

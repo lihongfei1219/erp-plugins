@@ -52,6 +52,17 @@ function responseText(payload) {
   return ''
 }
 
+function visibleOcrText(value) {
+  const fenced = value.trim().match(/^\s*```(?:html|xml|markdown|md|text)?\s*\n?([\s\S]*?)\n?```\s*$/i)?.[1] ?? value.trim()
+  return fenced
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<img\b[^>]*>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function sanitized(value, apiKey) {
   return String(value).replaceAll(apiKey, '[REDACTED]')
 }
@@ -100,7 +111,6 @@ async function testOcr(endpoint, apiKey) {
         {
           role: 'user',
           content: [
-            { type: 'text', text: '请识别图片中的文字，只返回识别结果，不要解释。' },
             { type: 'image_url', image_url: { url: SAMPLE_IMAGE_URL } }
           ]
         }
@@ -112,6 +122,9 @@ async function testOcr(endpoint, apiKey) {
   )
   const text = responseText(result.payload)
   if (!text) throw new Error('Qwen OCR 接口成功，但响应中没有 OCR 文本')
+  if (!visibleOcrText(text)) {
+    throw new Error('Qwen OCR 接口成功，但只返回了 HTML 图片占位符')
+  }
   console.log(`成功，耗时 ${result.elapsedMs} ms，请求 ID：${result.requestId}`)
   console.log(`结果预览：${text.replace(/\s+/g, ' ').slice(0, 160)}`)
 }

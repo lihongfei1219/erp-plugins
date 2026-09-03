@@ -4,7 +4,7 @@ import type {
   QualificationRow,
   UnitInitialApprovalExtraction,
   UnitInitialApprovalHeader
-} from '../../shared/ocr'
+} from '../../shared/business'
 import {
   normalizeUnitInitialApprovalSubmission,
   type UnitInitialApprovalSubmission

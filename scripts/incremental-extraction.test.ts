@@ -4,7 +4,7 @@ import type {
   QualificationRow,
   UnitInitialApprovalExtraction,
   UnitInitialApprovalHeader
-} from '../src/shared/ocr'
+} from '../src/shared/business'
 import {
   calculateExtractionCoverage,
   mergeExtractions

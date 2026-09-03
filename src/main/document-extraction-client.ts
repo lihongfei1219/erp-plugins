@@ -1,25 +1,14 @@
 import type {
   DocumentExtractionOptions,
   OcrClientResult,
-  OcrProgress,
-  UnitInitialApprovalExtraction
+  OcrProgress
 } from '../shared/ocr'
-
-export interface IncrementalExtractionUpdate {
-  extraction: UnitInitialApprovalExtraction
-  coveragePercent: number
-  completedPages: number
-  totalPages: number
-}
 
 export interface DocumentExtractionClient {
   extractDocument(
     filePath: string,
-    onProgress: (progress: OcrProgress) => void,
-    options?: DocumentExtractionOptions,
-    onExtractionUpdated?: (
-      update: IncrementalExtractionUpdate
-    ) => void | Promise<void>
+    onProgress: (progress: Omit<OcrProgress, 'sessionId' | 'businessId'>) => void,
+    options: DocumentExtractionOptions
   ): Promise<OcrClientResult>
 }
 

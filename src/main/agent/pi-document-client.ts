@@ -1,17 +1,14 @@
 import { Agent, type AgentTool } from '@earendil-works/pi-agent-core'
-import type { ImageContent, Model } from '@earendil-works/pi-ai'
+import type { ImageContent, Model, TextContent, UserMessage } from '@earendil-works/pi-ai'
 import { basename } from 'node:path'
-import type {
-  DocumentExtractionClient,
-  IncrementalExtractionUpdate
-} from '../document-extraction-client'
+import type { DocumentExtractionClient } from '../document-extraction-client'
+import type { BusinessExtraction } from '../../shared/business'
 import type {
   DocumentExtractionOptions,
   OcrClientResult,
   OcrDocumentResult,
   OcrPage,
-  OcrProgress,
-  UnitInitialApprovalExtraction
+  OcrProgress
 } from '../../shared/ocr'
 import type { PiAgentConfig } from './config'
 import {
@@ -22,34 +19,24 @@ import {
 import { createPiModelRegistry, type PiModelRegistry } from './model-registry'
 import { runOcrWithRepeatedRecovery } from './ocr-recovery'
 import { normalizeExcludedPages } from '../page-selection'
-import {
-  createUnitInitialApprovalSubmissionTool,
-  normalizeUnitInitialApprovalSubmission,
-  unitInitialApprovalSystemPrompt,
-  type UnitInitialApprovalSubmission
-} from './unit-initial-approval-tool'
-import {
-  calculateExtractionCoverage,
-  mergeExtractions
-} from './incremental-extraction'
+import { getExtractionAdapter } from '../businesses/extraction-registry'
 
-const OCR_USER_INSTRUCTIONS = `请逐行识别图片中的全部可见文字，并尽量保持原始阅读顺序和换行。
-只返回识别出的原文，不要解释、概括、翻译或添加 Markdown 代码块。印章遮挡或无法辨认的内容使用 [无法辨认]，不要猜测。`
-
-const NORMALIZATION_SYSTEM_PROMPT = unitInitialApprovalSystemPrompt()
+const OCR_RETRY_INSTRUCTIONS = `直接抄录这张图片中实际可见的全部文字，按从上到下、从左到右的阅读顺序输出。
+只输出纯文本，不要输出 HTML、XML、Markdown、JSON 或 img/image 占位符。表格每行用换行分隔，各列用制表符分隔。
+印章遮挡或无法辨认的单字使用 ?，不要猜测，也不要重复已经输出的行。`
 
 interface PagePipelineResult {
   page: OcrPage
-  extraction: UnitInitialApprovalExtraction | null
+  extraction: BusinessExtraction | null
   warnings: string[]
 }
 
 function ocrPagePrompt(pageNumber: number, attempt: number): string {
-  const retryInstruction =
-    attempt > 1
-      ? '\n上一次识别触发了重复输出保护。本次每个可见区域只抄录一次；即使页面有多个相似模板，也不要循环输出同一行。识别到页面底部后立即停止。'
-      : ''
-  return `${OCR_USER_INSTRUCTIONS}\n这是原文件的第 ${pageNumber} 页。${retryInstruction}`
+  // Qwen3.5-OCR's own default prompt is the most reliable plain-text mode.
+  // Only add an explicit prompt when the first response was empty/placeholder.
+  return attempt === 1
+    ? ''
+    : `${OCR_RETRY_INSTRUCTIONS}\n这是原文件的第 ${pageNumber} 页；识别到页面底部后立即停止。`
 }
 
 function assistantText(agent: Agent): string {
@@ -100,7 +87,17 @@ async function promptWithTimeout(
   }, timeoutMs)
 
   try {
-    await agent.prompt(prompt, images)
+    if (images?.length) {
+      // Alibaba's documented request shape puts image_url before text. Keeping
+      // the same order also lets attempt 1 omit custom text and use Qwen's
+      // built-in OCR prompt.
+      const content: Array<ImageContent | TextContent> = [...images]
+      if (prompt.trim()) content.push({ type: 'text', text: prompt })
+      const message: UserMessage = { role: 'user', content, timestamp: Date.now() }
+      await agent.prompt(message)
+    } else {
+      await agent.prompt(prompt)
+    }
     if (timedOut) throw new Error(`模型请求超过 ${Math.round(timeoutMs / 1000)} 秒`)
     if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
   } finally {
@@ -140,15 +137,13 @@ export class PiDocumentClient implements DocumentExtractionClient {
 
   async extractDocument(
     filePath: string,
-    onProgress: (progress: OcrProgress) => void,
-    options: DocumentExtractionOptions = {},
-    onExtractionUpdated?: (
-      update: IncrementalExtractionUpdate
-    ) => void | Promise<void>
+    onProgress: (progress: Omit<OcrProgress, 'sessionId' | 'businessId'>) => void,
+    options: DocumentExtractionOptions
   ): Promise<OcrClientResult> {
     const startedAt = Date.now()
     let prepared: PreparedDocument | null = null
     const activeAgents = new Set<Agent>()
+    const adapter = getExtractionAdapter(options.businessId)
 
     try {
       onProgress({ stage: 'reading', current: 0, total: 1, message: '正在读取并检查文件' })
@@ -184,11 +179,10 @@ export class PiDocumentClient implements DocumentExtractionClient {
       }
 
       const recognitionWarnings: string[] = []
-      let cumulativeExtraction: UnitInitialApprovalExtraction | null = null
+      let cumulativeExtraction: BusinessExtraction | null = null
       let completedPages = 0
       let nextPageIndex = 0
       let renderTail: Promise<void> = Promise.resolve()
-      let fillTail: Promise<void> = Promise.resolve()
 
       const renderPage = (pageNumber: number): Promise<PreparedPageImage> => {
         const task = renderTail.then(async () => {
@@ -225,7 +219,7 @@ export class PiDocumentClient implements DocumentExtractionClient {
                 stage: 'recognizing',
                 current: completedPages,
                 total: selectedPages.length,
-                message: `第 ${pageNumber} 页检测到重复输出，正在自动重试`
+                message: `第 ${pageNumber} 页返回空内容、占位符或重复输出，正在自动重试`
               })
             }
             const agent = createAgent(this.registry, this.registry.ocrModel, '', [])
@@ -276,17 +270,17 @@ export class PiDocumentClient implements DocumentExtractionClient {
           stage: 'extracting',
           current: completedPages,
           total: selectedPages.length,
-          message: `第 ${pageNumber} 页 OCR 完成，正在立即标准化并准备代填`
+          message: `第 ${pageNumber} 页 OCR 完成，正在按“${options.businessId}”业务标准化`
         })
 
-        let submitted: UnitInitialApprovalSubmission | null = null
-        const submissionTool = createUnitInitialApprovalSubmissionTool((payload) => {
+        let submitted: unknown = null
+        const submissionTool = adapter.createSubmissionTool((payload) => {
           submitted = payload
         })
         const normalizerAgent = createAgent(
           this.registry,
           this.registry.normalizerModel,
-          NORMALIZATION_SYSTEM_PROMPT,
+          adapter.systemPrompt,
           [submissionTool],
           submissionTool.name
         )
@@ -307,21 +301,21 @@ export class PiDocumentClient implements DocumentExtractionClient {
           }
         }
 
-        const submission = submitted as UnitInitialApprovalSubmission | null
+        const submission = submitted
         if (!submission) {
           return {
             page,
             extraction: null,
             warnings: [
               ...warnings,
-              `第 ${pageNumber} 页字段标准化模型没有调用 submit_unit_initial_approval 工具`
+              `第 ${pageNumber} 页字段标准化模型没有调用 ${adapter.submissionToolName} 工具`
             ]
           }
         }
 
         return {
           page,
-          extraction: normalizeUnitInitialApprovalSubmission(submission, pageCount),
+          extraction: adapter.normalize(submission, pageCount),
           warnings
         }
       }
@@ -332,40 +326,19 @@ export class PiDocumentClient implements DocumentExtractionClient {
         completedPages += 1
         if (!result.extraction) return
 
-        cumulativeExtraction = mergeExtractions(
+        cumulativeExtraction = adapter.merge(
           cumulativeExtraction,
           result.extraction,
           pageCount
         )
         const extractionSnapshot = cumulativeExtraction
-        const coverage = calculateExtractionCoverage(extractionSnapshot)
+        const coveragePercent = adapter.coverage(extractionSnapshot)
         onProgress({
           stage: 'extracting',
           current: completedPages,
           total: selectedPages.length,
-          message: `已完成 ${completedPages}/${selectedPages.length} 页，字段覆盖率 ${coverage.percent}%，正在增量代填 ERP`
+          message: `已完成 ${completedPages}/${selectedPages.length} 页，字段覆盖率 ${coveragePercent}%`
         })
-
-        if (onExtractionUpdated) {
-          const fillTask = fillTail.then(() =>
-            onExtractionUpdated({
-              extraction: extractionSnapshot,
-              coveragePercent: coverage.percent,
-              completedPages,
-              totalPages: selectedPages.length
-            })
-          )
-          fillTail = fillTask.then(
-            () => undefined,
-            () => undefined
-          )
-          try {
-            await fillTask
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            recognitionWarnings.push(`增量代填 ERP 失败：${message}`)
-          }
-        }
       }
 
       const workerCount = Math.min(this.config.ocrConcurrency, selectedPages.length)
@@ -381,10 +354,12 @@ export class PiDocumentClient implements DocumentExtractionClient {
       })
       await Promise.all(workers)
       await renderTail
-      await fillTail
 
       if (!cumulativeExtraction) {
-        throw new Error('所有已处理页面都未能提取出可代填字段')
+        const detail = recognitionWarnings.length > 0
+          ? `：${recognitionWarnings.join('；')}`
+          : ''
+        throw new Error(`所有已处理页面都未能提取出可代填字段${detail}`)
       }
 
       const pages = Array.from({ length: pageCount }, (_, index): OcrPage => {
@@ -398,7 +373,7 @@ export class PiDocumentClient implements DocumentExtractionClient {
           blocks: []
         }
       })
-      const coverage = calculateExtractionCoverage(cumulativeExtraction)
+      const coveragePercent = adapter.coverage(cumulativeExtraction)
       const warnings = [
         '当前模型接口未提供字符级置信度，页面置信度显示为 0%',
         ...recognitionWarnings
@@ -409,6 +384,7 @@ export class PiDocumentClient implements DocumentExtractionClient {
         )
       }
       const result: OcrDocumentResult = {
+        businessId: options.businessId,
         fileName: basename(filePath),
         pageCount,
         blockCount: pages.reduce((total, page) => total + page.blocks.length, 0),
@@ -416,7 +392,7 @@ export class PiDocumentClient implements DocumentExtractionClient {
         engine: 'pi-agent-incremental',
         modelVersion: `${this.config.ocr.modelId} / ${this.config.normalizer.modelId}`,
         elapsedMs: Date.now() - startedAt,
-        coveragePercent: coverage.percent,
+        coveragePercent,
         warnings,
         pages,
         extractedData: cumulativeExtraction
@@ -425,11 +401,11 @@ export class PiDocumentClient implements DocumentExtractionClient {
         stage: 'completed',
         current: completedPages,
         total: selectedPages.length,
-        message: `全部页面处理完成，字段覆盖率 ${coverage.percent}%`
+        message: `全部页面处理完成，字段覆盖率 ${coveragePercent}%`
       })
       return {
         status: 'completed',
-        message: `已处理全部 ${completedPages} 页，字段覆盖率 ${coverage.percent}%`,
+        message: `已处理全部 ${completedPages} 页，字段覆盖率 ${coveragePercent}%`,
         result
       }
     } catch (error) {

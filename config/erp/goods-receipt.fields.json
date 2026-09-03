@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0.0",
+  "businessId": "goods-receipt",
+  "page": {
+    "module": "商品收货管理",
+    "name": "商品收货登记",
+    "ename": "SPSHDJ",
+    "cname": "商品收货登记",
+    "mode": "Add"
+  },
+  "headerFields": [
+    { "key": "supplierName", "label": "单位名称", "erpElementId": "DWMC", "controlType": "reference", "editability": "erp-reference", "source": "ocr-match" },
+    { "key": "departureDate", "label": "启运日期", "erpElementId": "QYRQ", "controlType": "date", "editability": "editable", "source": "ocr" },
+    { "key": "carrierName", "label": "承运单位", "erpElementId": "CYDW", "controlType": "input", "editability": "editable", "source": "ocr" },
+    { "key": "transportMethod", "label": "承运方式", "erpElementId": "CYFS", "controlType": "input", "editability": "editable", "source": "ocr" },
+    { "key": "receiptDateTime", "label": "收货日期", "erpElementId": "SHRQ1", "controlType": "datetime", "editability": "editable", "source": "document-or-user" },
+    { "key": "surfaceTemperature", "label": "外表温度", "erpElementId": "WBWD", "controlType": "number", "editability": "editable", "source": "document-or-user" },
+    { "key": "transportVehicle", "label": "运输工具", "erpElementId": "YSFS", "controlType": "input", "editability": "editable", "source": "ocr" },
+    { "key": "departurePlace", "label": "启运地点", "erpElementId": "qydd", "controlType": "input", "editability": "editable", "source": "ocr" },
+    { "key": "departureDateTime", "label": "启运日时", "erpElementId": "QYRS", "controlType": "datetime", "editability": "editable", "source": "ocr" },
+    { "key": "receiptDateTimeDetail", "label": "收货日时", "erpElementId": "SHSJ", "controlType": "datetime", "editability": "editable", "source": "document-or-user" },
+    { "key": "actualTransportHours", "label": "实际运输小时", "erpElementId": "SJYSSJ", "controlType": "number", "editability": "editable", "source": "derived-or-user" },
+    { "key": "receiptRemark", "label": "收货登记备注", "erpElementId": "SHDJBZ", "controlType": "textarea", "editability": "editable", "source": "ocr-or-user" }
+  ],
+  "manualDecisionFields": [
+    { "key": "goodsAccountConsistency", "label": "票账货", "erpElementId": "PZH" },
+    { "key": "deliveryNoteCompliance", "label": "随货通行单", "erpElementId": "XHTXD" },
+    { "key": "enclosedVehicle", "label": "封闭式货车", "erpElementId": "FBSHC" },
+    { "key": "logisticsVoucherCompliance", "label": "物流运输凭证", "erpElementId": "WLYSPZ" },
+    { "key": "transportProcessTemperatureStatus", "label": "运输过程温度", "erpElementId": "YSGCWD" },
+    { "key": "transportTimeLimitStatus", "label": "运输时限情况", "erpElementId": "YSSXQK" }
+  ],
+  "detailGrid": {
+    "erpController": "gridEditBody",
+    "selectionMode": "match-existing-order-lines",
+    "fields": [
+      { "key": "productName", "label": "商品名称", "erpCellName": "SPMC", "editability": "erp-reference", "source": "ocr-match" },
+      { "key": "arrivalQuantity", "label": "到货数量", "erpCellName": "DHSL", "editability": "editable", "source": "ocr" },
+      { "key": "receiptQuantity", "label": "收货数量", "erpCellName": "SHSL", "editability": "editable", "source": "ocr" },
+      { "key": "remark", "label": "备注", "erpCellName": "BZ", "editability": "editable", "source": "ocr-or-user" },
+      { "key": "batchNumber", "label": "商品批号", "erpCellName": "SPPH", "editability": "hidden-readonly", "source": "evidence" },
+      { "key": "productionDate", "label": "生产日期", "erpCellName": "SCRQ", "editability": "hidden-readonly", "source": "evidence" },
+      { "key": "expiryDate", "label": "有效期至", "erpCellName": "YXQZ", "editability": "hidden-readonly", "source": "evidence" }
+    ]
+  }
+}

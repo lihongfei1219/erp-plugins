@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   isRepeatedFinishReason,
+  normalizeUsableOcrText,
   runOcrWithRepeatedRecovery
 } from '../src/main/agent/ocr-recovery.ts'
 import { normalizeExcludedPages } from '../src/main/page-selection.ts'
@@ -27,6 +28,40 @@ test('returns a normal OCR response without retrying', async () => {
     attempts: 1,
     usedPartialResult: false
   })
+})
+
+test('rejects an HTML image placeholder as OCR text', () => {
+  assert.equal(
+    normalizeUsableOcrText('```html\n<html><body><div class="image"><img/></div></body></html>\n```'),
+    null
+  )
+})
+
+test('keeps visible text while removing accidental HTML presentation markup', () => {
+  assert.equal(
+    normalizeUsableOcrText('<html><body><div>出库单号：SCKGAK000007111</div><div>客户名称：吉林柏锦医药有限公司</div></body></html>'),
+    '出库单号：SCKGAK000007111\n客户名称：吉林柏锦医药有限公司'
+  )
+})
+
+test('retries an image placeholder and accepts the next transcription', async () => {
+  const result = await runOcrWithRepeatedRecovery(async (attempt) =>
+    attempt === 1
+      ? { text: '<html><body><div class="image"><img/></div></body></html>' }
+      : { text: '江西康强医药有限公司销售出库清单\n出库单号：SCKGAK000007111' }
+  )
+
+  assert.equal(result.attempts, 2)
+  assert.match(result.text, /江西康强医药有限公司/)
+})
+
+test('reports consecutive placeholder responses as unusable', async () => {
+  await assert.rejects(
+    runOcrWithRepeatedRecovery(async () => ({
+      text: '<html><body><div class="image"><img/></div></body></html>'
+    })),
+    /空文本或图片占位符/
+  )
 })
 
 test('retries a repeated response and prefers the complete retry', async () => {

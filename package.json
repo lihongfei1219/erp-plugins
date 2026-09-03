@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Electron client for ERP receipt OCR assistance",
+  "author": {
+    "name": "lff",
+    "email": "arui1219@163.com"
+  },
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -12,9 +16,12 @@
     "test:bailian-models:prompt": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-qwen-ocr.ps1",
     "test:ocr-recovery": "node --experimental-strip-types --test scripts/ocr-recovery.test.mjs",
     "test:incremental-extraction": "esbuild scripts/incremental-extraction.test.ts --bundle --platform=node --format=esm --outfile=tmp/incremental-extraction.test.mjs && node --test tmp/incremental-extraction.test.mjs",
+    "test:business-isolation": "esbuild scripts/business-isolation.test.ts --bundle --platform=node --format=esm --outfile=tmp/business-isolation.test.mjs && node --test tmp/business-isolation.test.mjs",
+    "test:purchase-order": "esbuild scripts/purchase-order.test.ts --bundle --platform=node --format=esm --outfile=tmp/purchase-order.test.mjs && node --test tmp/purchase-order.test.mjs",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "build": "npm run typecheck && electron-vite build",
-    "start": "electron-vite preview"
+    "start": "electron-vite preview",
+    "dist:win": "npm run build && electron-builder --win nsis --x64"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.3",
@@ -27,9 +34,39 @@
     "@types/node": "^26.3.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
     "vue-tsc": "^3.3.11"
+  },
+  "build": {
+    "appId": "com.internal.erpocr",
+    "productName": "ERP OCR 助手",
+    "copyright": "Copyright © 2026 lff",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always"
+    }
   }
 }

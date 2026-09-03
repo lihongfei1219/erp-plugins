@@ -6,7 +6,7 @@ import type {
   QualificationRow,
   UnitInitialApprovalExtraction,
   UnitInitialApprovalHeader
-} from '../../shared/ocr'
+} from '../../shared/business'
 
 const NullableString = Type.Union([Type.String(), Type.Null()])
 const HeaderSchema = Type.Object(

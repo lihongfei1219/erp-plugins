@@ -2,18 +2,26 @@ import { BrowserWindow, WebContentsView } from 'electron'
 import type { ErpConfig } from './erp-config'
 import {
   buildExtractedAutofillScript,
-  buildMockAutofillScript,
+  buildFixtureAutofillScript,
   createAutofillFailure
 } from './erp-autofill'
 import type { ErpAutofillResult, ErpState } from '../shared/erp'
-import type { UnitInitialApprovalExtraction } from '../shared/ocr'
+import {
+  BUSINESS_DEFINITIONS,
+  type BusinessExtraction,
+  type BusinessId,
+  type ErpPageContext
+} from '../shared/business'
+import { toPageContext, type ErpPageDescriptor } from './businesses/page-registry'
 
 const TOOLBAR_HEIGHT = 64
-const SIDEBAR_WIDTH = 360
+const DEFAULT_SIDEBAR_WIDTH = 400
 
 export class ErpViewController {
   private readonly view: WebContentsView | null
   private state: ErpState
+  private assistantWidth = DEFAULT_SIDEBAR_WIDTH
+  private pageDetectionVersion = 0
 
   constructor(
     private readonly window: BrowserWindow,
@@ -26,7 +34,8 @@ export class ErpViewController {
       url: config.url?.toString() ?? null,
       canGoBack: false,
       canGoForward: false,
-      message: config.url ? null : '请在 .env 中配置 MAIN_VITE_ERP_URL'
+      message: config.url ? null : '请在 .env 中配置 MAIN_VITE_ERP_URL',
+      currentPage: null
     }
 
     if (!config.url) {
@@ -82,6 +91,12 @@ export class ErpViewController {
     this.view?.webContents.reload()
   }
 
+  setAssistantWidth(width: number): void {
+    if (!Number.isFinite(width)) return
+    this.assistantWidth = Math.max(56, Math.min(560, Math.round(width)))
+    this.updateBounds()
+  }
+
   setVisible(visible: boolean): void {
     if (!this.view || this.view.webContents.isDestroyed()) {
       return
@@ -94,65 +109,52 @@ export class ErpViewController {
     this.view.setVisible(visible)
   }
 
-  async fillMockData(): Promise<ErpAutofillResult> {
-    return this.fillWithScript(buildMockAutofillScript())
+  async fillFixture(businessId: BusinessId): Promise<ErpAutofillResult> {
+    return this.fillWithScript(businessId, buildFixtureAutofillScript(businessId))
   }
 
   async fillExtractedData(
-    extraction: UnitInitialApprovalExtraction
+    businessId: BusinessId,
+    extraction: BusinessExtraction
   ): Promise<ErpAutofillResult> {
-    return this.fillWithScript(buildExtractedAutofillScript(extraction))
+    if (extraction.documentType !== businessId) {
+      return createAutofillFailure('failed', '识别结果与当前业务不一致，已拒绝代填')
+    }
+    return this.fillWithScript(businessId, buildExtractedAutofillScript(extraction))
   }
 
-  private async fillWithScript(script: string): Promise<ErpAutofillResult> {
+  private async fillWithScript(
+    businessId: BusinessId,
+    script: string
+  ): Promise<ErpAutofillResult> {
     if (!this.view || this.view.webContents.isDestroyed()) {
       return createAutofillFailure('unavailable', 'ERP 页面尚未加载')
     }
 
-    const contents = this.view.webContents
-    const frames = [contents.mainFrame, ...contents.mainFrame.frames]
-    const editorFrame = frames.find((frame) => {
-      try {
-        const url = new URL(frame.url)
-        return (
-          this.isAllowedUrl(frame.url) &&
-          url.pathname.toLowerCase() === '/zhidan/zhidan.aspx' &&
-          url.searchParams.get('Type')?.toLowerCase() === 'add'
-        )
-      } catch {
-        return false
-      }
-    })
+    const detected = await this.findBusinessFrame(businessId)
+    const editorFrame = detected?.frame
 
     if (!editorFrame) {
+      const definition = BUSINESS_DEFINITIONS[businessId]
       return createAutofillFailure(
         'wrong-page',
-        '请先进入“购货首营管理 → 单位首营审批”，点击“新建”后再代填'
+        `请先进入“${definition.moduleName} → ${definition.name}”的新建页面后再代填`
       )
     }
 
     try {
-      const isExpectedForm = await editorFrame.executeJavaScript(
-        `document.title.includes('单位首营审批') && Boolean(document.getElementById('DWMC')) && Boolean(document.getElementById('YYZZH'))`,
-        true
-      )
-
-      if (!isExpectedForm) {
-        return createAutofillFailure('wrong-page', '当前新建页不是可识别的单位首营审批表单')
-      }
-
       const result = (await editorFrame.executeJavaScript(
         script,
         true
       )) as {
         filledHeaderFields?: unknown
-        filledQualificationRows?: unknown
+        filledDetailRows?: unknown
         skippedFields?: unknown
       }
 
       if (
         typeof result?.filledHeaderFields !== 'number' ||
-        typeof result?.filledQualificationRows !== 'number' ||
+        typeof result?.filledDetailRows !== 'number' ||
         !Array.isArray(result?.skippedFields)
       ) {
         return createAutofillFailure('failed', 'ERP 页面没有返回有效的代填结果')
@@ -165,9 +167,9 @@ export class ErpViewController {
 
       return {
         status: 'filled',
-        message: `已填入 ${result.filledHeaderFields} 个基本字段和 ${result.filledQualificationRows} 条证照${skippedMessage}；请核对后手动保存`,
+        message: `已填入 ${result.filledHeaderFields} 个基本字段和 ${result.filledDetailRows} 条明细${skippedMessage}；请核对后手动保存`,
         filledHeaderFields: result.filledHeaderFields,
-        filledQualificationRows: result.filledQualificationRows,
+        filledDetailRows: result.filledDetailRows,
         skippedFields
       }
     } catch (error) {
@@ -200,7 +202,7 @@ export class ErpViewController {
     this.view.setBounds({
       x: 0,
       y: TOOLBAR_HEIGHT,
-      width: Math.max(0, width - SIDEBAR_WIDTH),
+      width: Math.max(0, width - this.assistantWidth),
       height: Math.max(0, height - TOOLBAR_HEIGHT)
     })
   }
@@ -249,18 +251,26 @@ export class ErpViewController {
 
     contents.on('did-finish-load', () => {
       this.refreshNavigationState('ready')
+      void this.refreshPageContext()
     })
 
     contents.on('did-stop-loading', () => {
       this.refreshNavigationState('ready')
+      void this.refreshPageContext()
     })
 
     contents.on('did-navigate', () => {
       this.refreshNavigationState()
+      void this.refreshPageContext()
     })
 
     contents.on('did-navigate-in-page', () => {
       this.refreshNavigationState()
+      void this.refreshPageContext()
+    })
+
+    contents.on('did-frame-finish-load', () => {
+      void this.refreshPageContext()
     })
 
     contents.on(
@@ -301,6 +311,66 @@ export class ErpViewController {
     } catch {
       return false
     }
+  }
+
+  private async refreshPageContext(): Promise<void> {
+    const detectionVersion = ++this.pageDetectionVersion
+    const detected = await this.findBusinessFrame()
+    if (detectionVersion !== this.pageDetectionVersion) return
+    const currentPage = detected?.context ?? null
+    if (JSON.stringify(currentPage) !== JSON.stringify(this.state.currentPage)) {
+      this.patchState({ currentPage })
+    }
+  }
+
+  private async findBusinessFrame(
+    expectedBusinessId?: BusinessId
+  ): Promise<{ frame: Electron.WebFrameMain; context: ErpPageContext } | null> {
+    if (!this.view || this.view.webContents.isDestroyed()) return null
+    const contents = this.view.webContents
+    const frames = [contents.mainFrame, ...contents.mainFrame.frames]
+
+    const candidates: Array<{ frame: Electron.WebFrameMain; context: ErpPageContext; visible: boolean }> = []
+    for (const frame of frames) {
+      if (!this.isAllowedUrl(frame.url)) continue
+      let descriptor: ErpPageDescriptor | null = null
+      try {
+        descriptor = (await frame.executeJavaScript(
+          `(() => {
+            const value = (id) => {
+              const element = document.getElementById(id)
+              return element && 'value' in element ? String(element.value || '').trim() : null
+            }
+            const knownIds = ['DWMC', 'YYZZH', 'QYRQ', 'CYDW', 'FKFS', 'SPMC']
+            return {
+              ename: value('Ename'),
+              cname: value('Cname'),
+              mode: value('Mode'),
+              title: document.title || '',
+              frameUrl: location.href,
+              elementIds: knownIds.filter((id) => Boolean(document.getElementById(id))),
+              visible: (() => {
+                const element = window.frameElement
+                if (!element) return true
+                const style = getComputedStyle(element)
+                const rect = element.getBoundingClientRect()
+                return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
+              })()
+            }
+          })()`,
+          true
+        )) as ErpPageDescriptor
+      } catch {
+        continue
+      }
+
+      const context = toPageContext(descriptor)
+      if (!context.supported || !context.isNew) continue
+      if (expectedBusinessId && context.businessId !== expectedBusinessId) continue
+      candidates.push({ frame, context, visible: descriptor.visible })
+    }
+    const active = candidates.find((candidate) => candidate.visible)
+    return active ? { frame: active.frame, context: active.context } : null
   }
 
   private patchState(patch: Partial<ErpState>): void {

@@ -1,4 +1,5 @@
 interface ImportMetaEnv {
+  readonly DASHSCOPE_API_KEY?: string
   readonly MAIN_VITE_ERP_URL?: string
   readonly MAIN_VITE_ALLOWED_ORIGINS?: string
   readonly MAIN_VITE_PI_OCR_BASE_URL?: string

@@ -1,3 +1,5 @@
+import type { BusinessExtraction, BusinessId } from './business'
+
 export const OCR_IPC = {
   selectDocument: 'ocr:select-document',
   extractDocument: 'ocr:extract-document',
@@ -11,6 +13,8 @@ export interface OcrDocumentPreviewPage {
 }
 
 export interface OcrDocumentPreview {
+  sessionId: string
+  businessId: BusinessId
   token: string
   fileName: string
   pageCount: number
@@ -24,11 +28,25 @@ export interface OcrPreviewResult {
 }
 
 export interface OcrExtractionRequest {
+  sessionId: string
+  businessId: BusinessId
   token: string
   excludedPages: number[]
 }
 
+export interface OcrCancelRequest {
+  sessionId: string
+  businessId: BusinessId
+  token: string
+}
+
+export interface OcrDocumentSelectionRequest {
+  sessionId: string
+  businessId: BusinessId
+}
+
 export interface DocumentExtractionOptions {
+  businessId: BusinessId
   excludedPages?: number[]
 }
 
@@ -40,6 +58,8 @@ export type OcrStage =
   | 'extracting'
   | 'completed'
 export interface OcrProgress {
+  sessionId: string
+  businessId: BusinessId
   stage: OcrStage
   current: number
   total: number
@@ -59,70 +79,8 @@ export interface OcrPage {
   blocks: OcrBlock[]
 }
 
-export interface ExtractionEvidence {
-  sourcePages: number[]
-  confidence: number
-  reviewRequired: boolean
-}
-
-export interface UnitInitialApprovalHeader {
-  referenceYaoshibang: string | null
-  referenceYaobang: string | null
-  unitCode: string | null
-  exists: string | boolean | null
-  unitName: string | null
-  buyerName: string | null
-  businessDivision: string | null
-  buyerIdCardNo: string | null
-  companyBankName: string | null
-  unitShortName: string | null
-  businessLicenseNo: string | null
-  legalRepresentative: string | null
-  companyTaxNo: string | null
-  registeredAddress: string | null
-  companyInvoiceType: string | null
-  selfPickupName: string | null
-  warehouseAddress: string | null
-  companyAccountName: string | null
-  selfPickupIdCardNo: string | null
-  unitPhone: string | null
-  companyBankAccount: string | null
-  siteInspectionStatus: string | null
-  qualityResponsiblePerson: string | null
-  unitType: string | null
-  invoiceContactPhone: string | null
-  enterpriseResponsiblePerson: string | null
-  receivingPerson: string | null
-  receivingPhone: string | null
-  receivingAddress: string | null
-  earliestQualificationExpiryDate: string | null
-  qualificationExpiryReminder: string | null
-  businessScope: string[]
-}
-
-export interface QualificationRow {
-  dataType: string
-  certificateNo: string | null
-  issuingAuthority: string | null
-  issueDate: string | null
-  expiryDate: string | null
-  expiryControl: boolean
-  materialProvided: boolean
-  sourcePages: number[]
-}
-
-export interface UnitInitialApprovalExtraction {
-  documentType: 'unit-initial-approval'
-  header: UnitInitialApprovalHeader
-  qualificationRows: QualificationRow[]
-  fieldEvidence: Record<string, ExtractionEvidence>
-  recognizedFieldCount: number
-  missingRecommendedFields: string[]
-  reviewRequired: string[]
-  readyForAutofill: boolean
-}
-
 export interface OcrDocumentResult {
+  businessId: BusinessId
   fileName: string
   pageCount: number
   blockCount: number
@@ -133,7 +91,7 @@ export interface OcrDocumentResult {
   coveragePercent: number
   warnings: string[]
   pages: OcrPage[]
-  extractedData: UnitInitialApprovalExtraction | null
+  extractedData: BusinessExtraction | null
 }
 
 export interface OcrClientResult {

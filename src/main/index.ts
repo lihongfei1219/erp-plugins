@@ -4,23 +4,22 @@ import { basename, join } from 'node:path'
 import { loadErpConfig } from './erp-config'
 import { ErpViewController } from './erp-view'
 import { ERP_IPC, type ErpState } from '../shared/erp'
+import type { ErpBusinessRequest, ErpFillSessionRequest } from '../shared/erp'
+import type { BusinessId } from '../shared/business'
 import type { DocumentExtractionClient } from './document-extraction-client'
 import { createDocumentExtractionClient } from './extraction-client-factory'
 import {
   OCR_IPC,
+  type OcrCancelRequest,
+  type OcrDocumentSelectionRequest,
   type OcrExtractionRequest
 } from '../shared/ocr'
 import { createLocalDocumentPreview } from './agent/document-images'
 import { normalizeExcludedPages } from './page-selection'
+import { WorkflowSessionManager } from './workflow-session-manager'
 
 const LOCAL_PREVIEW_MAX_BYTES = 100 * 1024 * 1024
 const LOCAL_PREVIEW_MAX_PAGES = 50
-
-interface PendingDocumentSelection {
-  token: string
-  filePath: string
-  pageCount: number
-}
 
 function loadLocalEnvironment(): void {
   try {
@@ -37,7 +36,7 @@ loadLocalEnvironment()
 let mainWindow: BrowserWindow | null = null
 let erpController: ErpViewController | null = null
 let ocrClient: DocumentExtractionClient | null = null
-let pendingDocumentSelection: PendingDocumentSelection | null = null
+const workflowSessions = new WorkflowSessionManager()
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -67,7 +66,7 @@ function createMainWindow(): void {
   mainWindow.on('closed', () => {
     erpController?.dispose()
     erpController = null
-    pendingDocumentSelection = null
+    workflowSessions.clear()
     mainWindow = null
   })
 
@@ -91,7 +90,28 @@ function emptyErpState(): ErpState {
     url: null,
     canGoBack: false,
     canGoForward: false,
-    message: 'ERP 视图尚未初始化'
+    message: 'ERP 视图尚未初始化',
+    currentPage: null
+  }
+}
+
+function isBusinessId(value: unknown): value is BusinessId {
+  return value === 'unit-initial-approval' ||
+    value === 'goods-receipt' ||
+    value === 'purchase-order'
+}
+
+function parseBusinessRequest(value: unknown): ErpBusinessRequest {
+  if (!value || typeof value !== 'object') throw new Error('业务请求无效')
+  const request = value as Partial<ErpBusinessRequest>
+  if (!isBusinessId(request.businessId)) throw new Error('不支持的业务类型')
+  return { businessId: request.businessId }
+}
+
+function ensureCurrentBusiness(businessId: BusinessId): void {
+  const page = erpController?.getState().currentPage
+  if (!page || !page.isNew || page.businessId !== businessId) {
+    throw new Error('当前 ERP 新建页面与所选业务不一致')
   }
 }
 
@@ -116,7 +136,13 @@ function registerIpcHandlers(): void {
     erpController?.reload()
   })
 
-  ipcMain.handle(ERP_IPC.fillMockData, async (event) => {
+  ipcMain.handle(ERP_IPC.setAssistantWidth, (event, value: unknown) => {
+    assertTrustedShell(event)
+    if (typeof value !== 'number' || !Number.isFinite(value)) return
+    erpController?.setAssistantWidth(value)
+  })
+
+  ipcMain.handle(ERP_IPC.fillFixture, async (event, value: unknown) => {
     assertTrustedShell(event)
 
     if (!erpController) {
@@ -124,18 +150,68 @@ function registerIpcHandlers(): void {
         status: 'unavailable',
         message: 'ERP 视图尚未初始化',
         filledHeaderFields: 0,
-        filledQualificationRows: 0,
+        filledDetailRows: 0,
         skippedFields: []
       }
     }
-
-    return erpController.fillMockData()
+    try {
+      const request = parseBusinessRequest(value)
+      ensureCurrentBusiness(request.businessId)
+      return erpController.fillFixture(request.businessId)
+    } catch (error) {
+      return {
+        status: 'wrong-page',
+        message: error instanceof Error ? error.message : '测试数据与当前业务不一致',
+        filledHeaderFields: 0,
+        filledDetailRows: 0,
+        skippedFields: []
+      }
+    }
   })
 
-  ipcMain.handle(OCR_IPC.selectDocument, async (event) => {
+  ipcMain.handle(ERP_IPC.fillSession, async (event, value: unknown) => {
+    assertTrustedShell(event)
+    try {
+      if (!value || typeof value !== 'object') throw new Error('代填请求无效')
+      const request = value as Partial<ErpFillSessionRequest>
+      if (!isBusinessId(request.businessId) || typeof request.sessionId !== 'string') {
+        throw new Error('代填会话无效')
+      }
+      ensureCurrentBusiness(request.businessId)
+      if (!erpController) throw new Error('ERP 视图尚未初始化')
+      const extraction = workflowSessions.getExtraction(request.sessionId, request.businessId)
+      return erpController.fillExtractedData(request.businessId, extraction)
+    } catch (error) {
+      return {
+        status: 'failed',
+        message: error instanceof Error ? error.message : '代填失败',
+        filledHeaderFields: 0,
+        filledDetailRows: 0,
+        skippedFields: []
+      }
+    }
+  })
+
+  ipcMain.handle(OCR_IPC.selectDocument, async (event, value: unknown) => {
     assertTrustedShell(event)
     erpController?.setVisible(true)
-    pendingDocumentSelection = null
+    if (!value || typeof value !== 'object') {
+      return { status: 'failed', message: '文件选择请求无效', preview: null }
+    }
+    const request = value as Partial<OcrDocumentSelectionRequest>
+    if (typeof request.sessionId !== 'string' || !isBusinessId(request.businessId)) {
+      return { status: 'failed', message: '业务会话无效', preview: null }
+    }
+    try {
+      ensureCurrentBusiness(request.businessId)
+    } catch (error) {
+      return {
+        status: 'failed',
+        message: error instanceof Error ? error.message : '当前页面不支持票据识别',
+        preview: null
+      }
+    }
+    workflowSessions.cancel(request.sessionId)
     if (!mainWindow) {
       return { status: 'failed', message: '客户端窗口尚未初始化', preview: null }
     }
@@ -163,6 +239,8 @@ function registerIpcHandlers(): void {
         LOCAL_PREVIEW_MAX_PAGES,
         (current, total) => {
           mainWindow?.webContents.send(OCR_IPC.progress, {
+            sessionId: request.sessionId,
+            businessId: request.businessId,
             stage: 'rendering',
             current,
             total,
@@ -171,11 +249,13 @@ function registerIpcHandlers(): void {
         }
       )
       const token = randomUUID()
-      pendingDocumentSelection = {
+      workflowSessions.setPending({
+        sessionId: request.sessionId,
+        businessId: request.businessId,
         token,
         filePath,
         pageCount: localPreview.pageCount
-      }
+      })
       // WebContentsView is composed above renderer DOM regardless of z-index.
       // Hide it while the local privacy-selection modal is visible.
       erpController?.setVisible(false)
@@ -183,6 +263,8 @@ function registerIpcHandlers(): void {
         status: 'ready',
         message: `已在本地生成 ${localPreview.pageCount} 页预览，请排除高敏页面`,
         preview: {
+          sessionId: request.sessionId,
+          businessId: request.businessId,
           token,
           fileName: basename(filePath),
           pageCount: localPreview.pageCount,
@@ -196,12 +278,16 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(OCR_IPC.cancelDocument, (event, token: unknown) => {
+  ipcMain.handle(OCR_IPC.cancelDocument, (event, value: unknown) => {
     assertTrustedShell(event)
     erpController?.setVisible(true)
-    if (typeof token === 'string' && pendingDocumentSelection?.token === token) {
-      pendingDocumentSelection = null
-    }
+    if (!value || typeof value !== 'object') return
+    const request = value as Partial<OcrCancelRequest>
+    if (
+      typeof request.sessionId === 'string' &&
+      isBusinessId(request.businessId) &&
+      typeof request.token === 'string'
+    ) workflowSessions.cancel(request.sessionId, request.token)
   })
 
   ipcMain.handle(OCR_IPC.extractDocument, async (event, request: unknown) => {
@@ -217,9 +303,26 @@ function registerIpcHandlers(): void {
     }
 
     const candidate = request as Partial<OcrExtractionRequest>
-    const selection = pendingDocumentSelection
-    if (!selection || typeof candidate.token !== 'string' || candidate.token !== selection.token) {
-      return { status: 'failed', message: '文件选择已失效，请重新选择票据', result: null }
+    if (
+      typeof candidate.sessionId !== 'string' ||
+      !isBusinessId(candidate.businessId) ||
+      typeof candidate.token !== 'string'
+    ) return { status: 'failed', message: '识别会话无效', result: null }
+
+    let selection
+    try {
+      ensureCurrentBusiness(candidate.businessId)
+      selection = workflowSessions.takePending(
+        candidate.sessionId,
+        candidate.businessId,
+        candidate.token
+      )
+    } catch (error) {
+      return {
+        status: 'failed',
+        message: error instanceof Error ? error.message : '文件选择已失效，请重新选择票据',
+        result: null
+      }
     }
 
     let excludedPages: number[]
@@ -235,18 +338,24 @@ function registerIpcHandlers(): void {
 
     // A selection token is single-use and the renderer never receives the
     // original local file path.
-    pendingDocumentSelection = null
     const result = await ocrClient.extractDocument(
       selection.filePath,
       (progress) => {
-        mainWindow?.webContents.send(OCR_IPC.progress, progress)
+        mainWindow?.webContents.send(OCR_IPC.progress, {
+          ...progress,
+          sessionId: selection.sessionId,
+          businessId: selection.businessId
+        })
       },
-      { excludedPages },
-      async ({ extraction }) => {
-        if (!erpController) return
-        await erpController.fillExtractedData(extraction)
-      }
+      { businessId: selection.businessId, excludedPages }
     )
+    if (result.status === 'completed' && result.result?.extractedData) {
+      workflowSessions.complete(
+        selection.sessionId,
+        selection.businessId,
+        result.result.extractedData
+      )
+    }
     return result
   })
 }

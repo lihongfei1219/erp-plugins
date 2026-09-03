@@ -55,8 +55,11 @@ export function loadPiAgentConfig(): PiAgentConfig {
     ) ?? ocrBaseUrl,
     'MAIN_VITE_PI_NORMALIZER_BASE_URL'
   )
+  const bundledApiKey = import.meta.env.DASHSCOPE_API_KEY?.trim() || ''
   const sharedApiKey =
-    process.env.DASHSCOPE_API_KEY?.trim() || process.env.PI_API_KEY?.trim() || ''
+    process.env.DASHSCOPE_API_KEY?.trim() ||
+    process.env.PI_API_KEY?.trim() ||
+    bundledApiKey
 
   return {
     ocr: {
@@ -75,7 +78,7 @@ export function loadPiAgentConfig(): PiAgentConfig {
         65536,
         'MAIN_VITE_PI_OCR_CONTEXT_WINDOW'
       ),
-      maxTokens: 4096
+      maxTokens: 16384
     },
     normalizer: {
       providerId: 'erp-field-normalizer',
