@@ -6,7 +6,7 @@ import electron from 'electron'
 
 await mkdir('tmp', { recursive: true })
 const test = process.argv[2] ?? 'multi-account'
-if (!['multi-account', 'erp-navigation', 'session-cache'].includes(test)) throw new Error('Unknown Electron regression')
+if (!['multi-account', 'erp-navigation', 'session-cache', 'purchase-queue'].includes(test)) throw new Error('Unknown Electron regression')
 const output = `tmp/${test}.electron-test.mjs`
 await build({ entryPoints: [`scripts/${test}.electron-test.ts`], outfile: output,
   bundle: true, packages: 'external', platform: 'node', format: 'esm', external: ['electron'],

@@ -6,6 +6,8 @@ import { WindowManager } from './window-manager'
 import type { DocumentExtractionClient } from './document-extraction-client'
 import { createDocumentExtractionClient } from './extraction-client-factory'
 import { registerWorkflowIpc } from './workflow-ipc'
+import { PurchaseQueueManager } from './purchase-queue'
+import { registerPurchaseQueueIpc } from './purchase-queue-ipc'
 
 function loadLocalEnvironment(): void {
   try {
@@ -21,6 +23,7 @@ loadLocalEnvironment()
 
 let windows: WindowManager
 let ocrClient: DocumentExtractionClient | null = null
+let purchaseQueue: PurchaseQueueManager | null = null
 
 const ownsInstance = app.requestSingleInstanceLock()
 if (!ownsInstance) app.quit()
@@ -36,7 +39,11 @@ else {
     })
     windows = new WindowManager(accounts, loadErpConfig())
     ocrClient = createDocumentExtractionClient()
+    purchaseQueue = new PurchaseQueueManager(join(app.getPath('userData'), 'purchase-queue'), ocrClient,
+      owner => windows.sendPurchaseQueueChanged(owner))
+    windows.attachPurchaseQueue(purchaseQueue)
     registerWorkflowIpc(windows, ocrClient)
+    registerPurchaseQueueIpc(windows, purchaseQueue)
     windows.registerIpc()
     windows.openAll()
     app.on('activate', () => {
@@ -51,3 +58,5 @@ else {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+app.on('before-quit', () => { purchaseQueue?.shutdown() })

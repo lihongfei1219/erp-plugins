@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import type { AccountApi } from '../../shared/accounts'
+import type { PurchaseQueueApi } from '../../shared/purchase-queue'
 
 import type {
   ErpAutofillResult,
@@ -20,6 +21,7 @@ import type {
 interface DesktopApi {
   readonly platform: NodeJS.Platform
   readonly accounts: AccountApi
+  readonly purchaseQueue: PurchaseQueueApi
   readonly erp: {
     getState: () => Promise<ErpState>
     goBack: () => Promise<void>

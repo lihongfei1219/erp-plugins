@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import type { AccountStore, SavedBounds } from './account-store'
 import { ACCOUNT_IPC } from '../shared/accounts'
 import { ERP_IPC } from '../shared/erp'
+import { PURCHASE_QUEUE_IPC } from '../shared/purchase-queue'
+import type { PurchaseQueueManager } from './purchase-queue'
 import type { ErpConfig } from './erp-config'
 import { ErpViewController } from './erp-view'
 import { WorkflowSessionManager } from './workflow-session-manager'
@@ -12,6 +14,7 @@ export interface WorkWindow {
   erpController: ErpViewController
   workflowSessions: WorkflowSessionManager
   accountId: string | null
+  purchaseQueueOwner: string | null
   lifetime: AbortController
   send: (channel: string, value: unknown) => void
 }
@@ -19,8 +22,21 @@ export interface WorkWindow {
 export class WindowManager {
   private readonly windows = new Map<number, WorkWindow>()
   private manager: BrowserWindow | null = null
+  private purchaseQueue: PurchaseQueueManager | null = null
 
   constructor(private readonly accounts: AccountStore, private readonly config: ErpConfig) {}
+
+  attachPurchaseQueue(queue: PurchaseQueueManager): void { this.purchaseQueue = queue }
+
+  sendPurchaseQueueChanged(owner: string): void {
+    for (const context of this.windows.values()) {
+      if (context.purchaseQueueOwner === owner) context.send(PURCHASE_QUEUE_IPC.changed, undefined)
+    }
+  }
+
+  private queueOwner(partition: string): string {
+    return `${partition}:${this.config.url?.origin ?? ''}`
+  }
 
   fromEvent(event: IpcMainInvokeEvent): WorkWindow {
     const context = this.windows.get(event.sender.id)
@@ -66,6 +82,7 @@ export class WindowManager {
       existing.mainWindow.show(); existing.mainWindow.focus(); return
     }
     const account = accountId ? this.accounts.get(accountId) : undefined
+    const purchaseQueueOwner = account ? this.queueOwner(this.accounts.partition(account.id)) : null
     const bounds = accountId ? this.validBounds(this.accounts.bounds(accountId)) : undefined
     const window = new BrowserWindow({ width: 1280, height: 800, ...bounds, minWidth: 960, minHeight: 640,
       title: account ? `${account.label} (${account.username}) · ERP 票据助手` : '手动登录 · ERP 票据助手',
@@ -82,12 +99,23 @@ export class WindowManager {
       if (previousIdentityStatus === 'signed-in' && state.account?.status !== 'signed-in') workflowSessions.clear()
       previousIdentityStatus = state.account?.status
       workflowSessions.retainOpenPages(state.openPageIds)
+      if (purchaseQueueOwner && this.purchaseQueue) {
+        try {
+          if (state.account?.status === 'signed-in') {
+            this.purchaseQueue.retainPages(purchaseQueueOwner, state.openPageIds)
+            this.purchaseQueue.activate(purchaseQueueOwner)
+          } else {
+            this.purchaseQueue.retainPages(purchaseQueueOwner, [])
+            this.purchaseQueue.suspend(purchaseQueueOwner)
+          }
+        } catch { /* Queue errors are reported by its IPC without disrupting ERP navigation. */ }
+      }
       send(ERP_IPC.stateChanged, state)
     }, account ? {
       partition: this.accounts.partition(account.id), account,
       credentials: () => this.accounts.credentials(account.id, this.config.url!.origin)
     } : {})
-    this.windows.set(window.webContents.id, { mainWindow: window, erpController, workflowSessions, accountId, lifetime, send })
+    this.windows.set(window.webContents.id, { mainWindow: window, erpController, workflowSessions, accountId, purchaseQueueOwner, lifetime, send })
     const senderId = window.webContents.id
     window.on('close', () => {
       if (accountId) {
@@ -99,6 +127,9 @@ export class WindowManager {
       lifetime.abort(new Error('窗口已关闭'))
       erpController.dispose()
       workflowSessions.clear()
+      if (purchaseQueueOwner) {
+        try { this.purchaseQueue?.retainPages(purchaseQueueOwner, []) } catch { /* Persisted results remain recoverable. */ }
+      }
       this.windows.delete(senderId)
       this.broadcast()
     })
@@ -161,6 +192,7 @@ export class WindowManager {
       const previousPartition = typeof id === 'string' ? this.accounts.partition(id) : undefined
       this.accounts.save(input, this.config.url?.origin ?? '')
       if (typeof id === 'string' && previousPartition && previousPartition !== this.accounts.partition(id)) {
+        this.purchaseQueue?.removeOwner(this.queueOwner(previousPartition))
         await session.fromPartition(previousPartition).clearStorageData()
       }
       this.broadcast()
@@ -173,6 +205,7 @@ export class WindowManager {
       // Remove credentials first, preventing a concurrent open while cookies are being cleared.
       const partition = this.accounts.partition(id)
       this.accounts.remove(id)
+      this.purchaseQueue?.removeOwner(this.queueOwner(partition))
       await session.fromPartition(partition).clearStorageData()
       this.broadcast()
     })

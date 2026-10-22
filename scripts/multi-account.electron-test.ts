@@ -6,6 +6,9 @@ import { resolve, join } from 'node:path'
 import { AccountStore } from '../src/main/account-store'
 import { WindowManager } from '../src/main/window-manager'
 import { registerWorkflowIpc } from '../src/main/workflow-ipc'
+import { PurchaseQueueManager } from '../src/main/purchase-queue'
+import { registerPurchaseQueueIpc } from '../src/main/purchase-queue-ipc'
+import type { DocumentExtractionClient } from '../src/main/document-extraction-client'
 import type { BusinessExtraction } from '../src/shared/business'
 
 mkdirSync(resolve('tmp'), { recursive: true })
@@ -61,14 +64,20 @@ async function run(): Promise<void> {
   const store = new AccountStore(file, { encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) })
   const manager = new WindowManager(store, { url, allowedOrigins: new Set([url.origin]) })
   manager.registerIpc()
-  registerWorkflowIpc(manager, { extractDocument: async (_path, progress, options) => {
+  const extractionClient: DocumentExtractionClient = { extractDocument: async (_path, progress, options) => {
     progress({ stage: 'recognizing', current: 0, total: 1, message: 'synthetic-progress' })
     await new Promise<void>(resolve => {
       if (options.signal?.aborted) { cancelObserved = true; resolve(); return }
       options.signal?.addEventListener('abort', () => { cancelObserved = true; resolve() }, { once: true })
     })
     return { status: 'cancelled', message: 'cancelled', result: null }
-  } })
+  } }
+  registerWorkflowIpc(manager, extractionClient)
+  const purchaseQueue = new PurchaseQueueManager(join(directory, 'purchase-queue'), extractionClient,
+    owner => manager.sendPurchaseQueueChanged(owner))
+  manager.attachPurchaseQueue(purchaseQueue)
+  registerPurchaseQueueIpc(manager, purchaseQueue)
+  app.on('before-quit', () => purchaseQueue.shutdown())
   manager.openAll()
   const settings = BrowserWindow.getAllWindows()[0]
   const work = () => BrowserWindow.getAllWindows().filter(window => window !== settings)

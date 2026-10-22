@@ -20,6 +20,8 @@
     "test:business-isolation": "esbuild scripts/business-isolation.test.ts --bundle --platform=node --format=esm --outfile=tmp/business-isolation.test.mjs && node --test tmp/business-isolation.test.mjs",
     "test:accounts": "esbuild scripts/account-store.test.ts --bundle --platform=node --format=esm --outfile=tmp/account-store.test.mjs && node --test tmp/account-store.test.mjs",
     "test:multi-account": "node scripts/run-multi-account-test.mjs",
+    "test:purchase-queue": "esbuild scripts/purchase-queue.test.ts --bundle --platform=node --format=esm --outfile=tmp/purchase-queue.test.mjs && node --test tmp/purchase-queue.test.mjs",
+    "test:purchase-queue:electron": "node scripts/run-multi-account-test.mjs purchase-queue",
     "test:goods-receipt": "esbuild scripts/goods-receipt.test.ts --bundle --platform=node --format=esm --outfile=tmp/goods-receipt.test.mjs && node --test tmp/goods-receipt.test.mjs",
     "test:goods-receipt:document": "node scripts/test-goods-receipt-document.mjs",
     "test:document-images": "node --test scripts/document-images.test.mjs",

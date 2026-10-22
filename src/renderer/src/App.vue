@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AccountManager from './AccountManager.vue'
+import PurchaseQueue from './PurchaseQueue.vue'
 import {
   BUSINESS_DEFINITIONS,
   type BusinessId,
@@ -62,6 +63,7 @@ const statusLabel = computed(() => {
   return labels[erpState.value.status]
 })
 const currentBusinessId = computed(() => erpState.value.currentPage?.businessId ?? null)
+const isPurchaseOrder = computed(() => currentBusinessId.value === 'purchase-order')
 const currentBusiness = computed(() => {
   const businessId = currentBusinessId.value
   return businessId ? BUSINESS_DEFINITIONS[businessId] : null
@@ -202,7 +204,7 @@ function toggleAssistant(): void {
 
 async function fillFixture(): Promise<void> {
   const businessId = currentBusinessId.value
-  if (!businessId || !currentPageReady.value) return
+  if (!businessId || businessId === 'purchase-order' || !currentPageReady.value) return
   autofillStatus.value = 'running'
   autofillResult.value = null
   try {
@@ -220,7 +222,7 @@ async function fillFixture(): Promise<void> {
 
 async function selectDocument(): Promise<void> {
   const businessId = currentBusinessId.value
-  if (!businessId || !currentPageReady.value) return
+  if (!businessId || businessId === 'purchase-order' || !currentPageReady.value) return
   const session = createSession(businessId)
   autofillResult.value = null
   patchSession(session.sessionId, {
@@ -294,7 +296,7 @@ function cancelDocumentPreview(): void {
 async function startExtraction(): Promise<void> {
   const session = activeSession.value
   const preview = session?.preview
-  if (!session || !preview || selectedPageCount.value === 0) return
+  if (!session || session.businessId === 'purchase-order' || !preview || selectedPageCount.value === 0) return
   const excludedPages = [...excludedPageNumbers.value]
   patchSession(session.sessionId, {
     status: 'recognizing', preview: null, selectedPageNumbers: [], result: null,
@@ -322,7 +324,7 @@ async function startExtraction(): Promise<void> {
 
 async function confirmAutofill(): Promise<void> {
   const session = activeSession.value
-  if (!session || !canConfirmAutofill.value) return
+  if (!session || session.businessId === 'purchase-order' || !canConfirmAutofill.value) return
   patchSession(session.sessionId, { status: 'filling' })
   autofillStatus.value = 'running'
   autofillResult.value = null
@@ -412,13 +414,15 @@ onMounted(async () => {
           <span>{{ currentPageReady ? '已就绪' : '不可代填' }}</span>
         </header>
 
-        <ol class="workflow-steps" aria-label="票据处理步骤">
+        <PurchaseQueue :erp-state="erpState" />
+
+        <ol v-if="!isPurchaseOrder" class="workflow-steps" aria-label="票据处理步骤">
           <li v-for="step in workflowSteps" :key="step.number" :data-active="workflowStep === step.number" :data-completed="workflowStep > step.number">
             <span>{{ workflowStep > step.number ? '✓' : step.number }}</span><small>{{ step.label }}</small>
           </li>
         </ol>
 
-        <section v-if="!currentPageReady" class="panel-state">
+        <section v-if="!currentPageReady && !isPurchaseOrder" class="panel-state">
           <div class="state-icon">⌁</div><strong>当前页面没有可用的代填任务</strong>
           <p>进入以下任一业务的新建页后，助手会自动切换，不会沿用其他业务的数据。</p>
           <div class="supported-businesses">
@@ -428,7 +432,7 @@ onMounted(async () => {
           </div>
         </section>
 
-        <template v-else>
+        <template v-else-if="currentPageReady && !isPurchaseOrder">
           <section v-if="!activeSession || activeSession.status === 'ready'" class="intake-card">
             <p class="eyebrow">DOCUMENT INTAKE</p><h3>选择{{ currentBusiness?.documentName }}</h3>
             <p>识别结果暂存在当前单据页，关闭该单据页后自动清除。</p>
@@ -522,16 +526,16 @@ onMounted(async () => {
         </template>
 
         <div v-if="erpState.message" class="notice" :data-error="erpState.status === 'error'">{{ erpState.message }}</div>
-        <div v-if="autofillResult" class="notice" :data-error="autofillStatus === 'error'" aria-live="polite">
+        <div v-if="autofillResult && !isPurchaseOrder" class="notice" :data-error="autofillStatus === 'error'" aria-live="polite">
           <strong>{{ autofillStatus === 'success' ? '代填完成' : '代填未完成' }}</strong><span>{{ autofillResult.message }}</span>
           <small v-if="autofillResult.skippedFields.length">未填：{{ autofillResult.skippedFields.join('、') }}</small>
         </div>
 
-        <footer v-if="activeSession?.status === 'reviewing'" class="action-bar">
+        <footer v-if="!isPurchaseOrder && activeSession?.status === 'reviewing'" class="action-bar">
           <button type="button" class="secondary-button" @click="selectDocument">重新选择</button>
           <button type="button" class="primary-button" :disabled="!canConfirmAutofill" @click="confirmAutofill">{{ autofillResult && autofillResult.status !== 'filled' ? '重试代填' : '确认并代填' }}</button>
         </footer>
-        <footer v-else-if="activeSession?.status === 'completed'" class="action-bar completed-action">
+        <footer v-else-if="!isPurchaseOrder && activeSession?.status === 'completed'" class="action-bar completed-action">
           <span>已代填，请在 ERP 中核对后手动保存。误删内容可直接重新代填，无需再次识别。</span>
           <button type="button" class="secondary-button" @click="selectDocument">新任务</button>
           <button type="button" class="primary-button" :disabled="!canConfirmAutofill" @click="confirmAutofill">重新代填</button>
@@ -539,7 +543,7 @@ onMounted(async () => {
       </div>
     </aside>
 
-    <div v-if="currentPreview" class="preview-backdrop" role="presentation" @click.self="cancelDocumentPreview">
+    <div v-if="currentPreview && !isPurchaseOrder" class="preview-backdrop" role="presentation" @click.self="cancelDocumentPreview">
       <section class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title">
         <header class="preview-header">
           <div><p class="eyebrow">LOCAL PRIVACY FILTER · {{ currentBusiness?.name }}</p><h2 id="preview-title">上传前排除高敏页面</h2><p>{{ currentPreview.fileName }} · 共 {{ currentPreview.pageCount }} 页</p></div>

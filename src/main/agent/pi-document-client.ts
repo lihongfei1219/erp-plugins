@@ -708,7 +708,7 @@ export class PiDocumentClient implements DocumentExtractionClient {
       }
     } catch (error) {
       abortRemaining(activeAgents)
-      if (options.signal?.aborted) return { status: 'cancelled', message: '所属窗口已关闭，识别已取消', result: null }
+      if (options.signal?.aborted) return { status: 'cancelled', message: '识别任务已暂停或取消', result: null }
       return { status: 'failed', message: safeErrorMessage(error, this.config), result: null }
     } finally {
       options.signal?.removeEventListener('abort', cancel)

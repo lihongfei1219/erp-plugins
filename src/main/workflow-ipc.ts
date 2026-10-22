@@ -89,6 +89,7 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
     }
     try {
       const request = parseBusinessRequest(value)
+      if (request.businessId === 'purchase-order') throw new Error('采购订单请从票据队列选择结果代填')
       ensureCurrentBusiness(erpController, request.businessId)
       return erpController.fillFixture(request.businessId)
     } catch (error) {
@@ -110,6 +111,7 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
       if (!isBusinessId(request.businessId) || typeof request.sessionId !== 'string') {
         throw new Error('代填会话无效')
       }
+      if (request.businessId === 'purchase-order') throw new Error('采购订单请从票据队列选择结果代填')
       if (!erpController) throw new Error('ERP 视图尚未初始化')
       await erpController.refreshPageContext()
       const pageId = workflowSessions.getPageId(request.sessionId, request.businessId)
@@ -134,6 +136,7 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
       return { status: 'failed', message: '文件选择请求无效', preview: null }
     }
     const request = value as Partial<OcrDocumentSelectionRequest>
+    if (request.businessId === 'purchase-order') return { status: 'failed', message: '采购订单请使用批量票据队列', preview: null }
     if (typeof request.sessionId !== 'string' || !isBusinessId(request.businessId) || typeof request.pageId !== 'string') {
       return { status: 'failed', message: '业务会话无效', preview: null }
     }
@@ -242,6 +245,7 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
     }
 
     const candidate = request as Partial<OcrExtractionRequest>
+    if (candidate.businessId === 'purchase-order') return { status: 'failed', message: '采购订单请使用批量票据队列', result: null }
     if (
       typeof candidate.sessionId !== 'string' ||
       !isBusinessId(candidate.businessId) ||

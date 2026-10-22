@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { ACCOUNT_IPC, type AccountApi } from '../shared/accounts'
+import { PURCHASE_QUEUE_IPC, type PurchaseQueueApi } from '../shared/purchase-queue'
 import {
   ERP_IPC,
   type ErpAutofillResult,
@@ -21,6 +22,23 @@ contextBridge.exposeInMainWorld(
   'desktop',
   Object.freeze({
     platform: process.platform,
+    purchaseQueue: Object.freeze({
+      list: () => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.list),
+      add: () => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.add),
+      get: taskId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.get, taskId),
+      retry: taskId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.retry, taskId),
+      cancel: taskId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.cancel, taskId),
+      remove: taskId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.remove, taskId),
+      resetUsage: taskId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.resetUsage, taskId),
+      fill: request => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.fill, request),
+      preview: taskId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.preview, taskId),
+      closePreview: () => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.closePreview),
+      onChanged: listener => {
+        const handler = (): void => listener()
+        ipcRenderer.on(PURCHASE_QUEUE_IPC.changed, handler)
+        return () => ipcRenderer.removeListener(PURCHASE_QUEUE_IPC.changed, handler)
+      }
+    } satisfies PurchaseQueueApi),
     accounts: Object.freeze({
       list: () => ipcRenderer.invoke(ACCOUNT_IPC.list),
       save: input => ipcRenderer.invoke(ACCOUNT_IPC.save, input),
