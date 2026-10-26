@@ -41,6 +41,7 @@ export interface OcrCancelRequest {
 }
 
 export interface OcrDocumentSelectionRequest {
+  dropToken?: string
   sessionId: string
   businessId: BusinessId
   pageId: string

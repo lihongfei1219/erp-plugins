@@ -1,6 +1,12 @@
 import type { ErpAutofillResult } from './erp'
 import type { OcrDocumentResult, OcrProgress } from './ocr'
 
+// Keep the existing IPC names and cache directory compatible with purchase caches.
+export type QueueBusinessId = 'purchase-order' | 'goods-receipt'
+export function isQueueBusiness(value: unknown): value is QueueBusinessId {
+  return value === 'purchase-order' || value === 'goods-receipt'
+}
+
 export const PURCHASE_QUEUE_IPC = {
   list: 'purchase-queue:list', add: 'purchase-queue:add', get: 'purchase-queue:get',
   retry: 'purchase-queue:retry', cancel: 'purchase-queue:cancel', remove: 'purchase-queue:remove',
@@ -12,6 +18,7 @@ export type PurchaseRecognitionStatus = 'queued' | 'recognizing' | 'ready' | 'fa
 export type PurchaseUsageStatus = 'available' | 'filling' | 'partial' | 'filled' | 'uncertain'
 
 export interface PurchaseQueueTask {
+  businessId: QueueBusinessId
   taskId: string
   batchId: string
   sequence: number
@@ -47,7 +54,8 @@ export interface PurchaseQueuePreview {
 
 export interface PurchaseQueueApi {
   list: () => Promise<PurchaseQueueTask[]>
-  add: () => Promise<PurchaseQueueImportResult>
+  add: (businessId: QueueBusinessId) => Promise<PurchaseQueueImportResult>
+  addDropped: (businessId: QueueBusinessId, token: string) => Promise<PurchaseQueueImportResult>
   get: (taskId: string) => Promise<PurchaseQueueTaskDetail>
   retry: (taskId: string) => Promise<void>
   cancel: (taskId: string) => Promise<void>

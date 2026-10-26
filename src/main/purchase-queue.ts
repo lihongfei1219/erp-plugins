@@ -6,6 +6,7 @@ import {
 import { copyFile, open, stat } from 'node:fs/promises'
 import { basename, extname, join, resolve, sep } from 'node:path'
 import type { DocumentExtractionClient } from './document-extraction-client'
+import { isQueueBusiness, type QueueBusinessId } from '../shared/purchase-queue'
 import type { ErpAutofillResult } from '../shared/erp'
 import type { OcrDocumentResult, OcrProgress } from '../shared/ocr'
 import type {
@@ -20,7 +21,7 @@ const USAGE = new Set(['available', 'filling', 'partial', 'filled', 'uncertain']
 const STAGES = new Set(['queued', 'reading', 'rendering', 'recognizing', 'extracting', 'completed'])
 
 interface StoredTask {
-  version: 1
+  version: 2
   sourceName: string
   task: PurchaseQueueTaskDetail
 }
@@ -51,8 +52,8 @@ function nullableString(value: unknown): boolean {
 }
 
 // A cached payload must be safe for both the review UI and the autofill adapter.
-function validResult(value: unknown): value is OcrDocumentResult {
-  if (!object(value) || value.businessId !== 'purchase-order' || typeof value.fileName !== 'string'
+function validResult(value: unknown, businessId: QueueBusinessId): value is OcrDocumentResult {
+  if (!object(value) || value.businessId !== businessId || typeof value.fileName !== 'string'
     || typeof value.engine !== 'string' || typeof value.modelVersion !== 'string'
     || !['pageCount', 'blockCount', 'ocrPages', 'elapsedMs', 'coveragePercent'].every(key => finite(value[key]))
     || !strings(value.warnings) || !Array.isArray(value.pages)) return false
@@ -62,20 +63,26 @@ function validResult(value: unknown): value is OcrDocumentResult {
       && (block.boundingBox === null || (Array.isArray(block.boundingBox) && block.boundingBox.every(finite)))))) return false
   const extraction = value.extractedData
   if (extraction === null) return true
-  if (!object(extraction) || extraction.documentType !== 'purchase-order' || !object(extraction.header)
+  if (!object(extraction) || extraction.documentType !== businessId || !object(extraction.header)
     || !Array.isArray(extraction.items) || !object(extraction.fieldEvidence)
     || !finite(extraction.recognizedFieldCount) || !strings(extraction.missingRecommendedFields)
     || !strings(extraction.reviewRequired) || typeof extraction.readyForAutofill !== 'boolean') return false
-  const headerStrings = ['supplierName', 'sourceOrderNumber', 'invoiceDate', 'departureDate', 'customerName',
+  const headerStrings = businessId === 'goods-receipt' ? ['supplierName', 'departureDate', 'carrierName',
+    'transportMethod', 'receiptDateTime', 'transportProcessTemperatureStatus', 'transportVehicle', 'departurePlace',
+    'departureDateTime', 'receiptDateTimeDetail', 'receiptRemark', 'goodsAccountConsistency', 'deliveryNoteCompliance',
+    'enclosedVehicle', 'logisticsVoucherCompliance', 'transportTimeLimitStatus'] : ['supplierName', 'sourceOrderNumber', 'invoiceDate', 'departureDate', 'customerName',
     'receivingAddress', 'carrierName', 'transportMethod', 'coldChain', 'receiptRemark', 'remark', 'paymentMethod', 'groupName']
   const header = extraction.header
+  const headerNumbers = businessId === 'goods-receipt' ? ['surfaceTemperature', 'actualTransportHours'] : ['transportTimeLimit']
   if (!headerStrings.every(key => nullableString(header[key]))
-    || !(header.transportTimeLimit === null || finite(header.transportTimeLimit))) return false
+    || !headerNumbers.every(key => header[key] === null || finite(header[key]))) return false
   if (!Object.values(extraction.fieldEvidence).every(item => object(item) && Array.isArray(item.sourcePages)
     && item.sourcePages.every(finite) && finite(item.confidence) && typeof item.reviewRequired === 'boolean')) return false
-  const itemStrings = ['specification', 'dosageForm', 'manufacturer', 'origin', 'approvalNumber',
+  const itemStrings = businessId === 'goods-receipt' ? ['specification', 'manufacturer', 'marketingAuthorizationHolder',
+    'unit', 'batchNumber', 'productionDate', 'expiryDate', 'approvalNumber', 'dosageForm', 'remark'] : ['specification', 'dosageForm', 'manufacturer', 'origin', 'approvalNumber',
     'marketingAuthorizationHolder', 'unit', 'batchNumber', 'productionDate', 'expiryDate', 'qualityStatus']
-  const itemNumbers = ['packageQuantity', 'quantity', 'taxIncludedUnitPrice', 'taxIncludedAmount']
+  const itemNumbers = businessId === 'goods-receipt' ? ['packageQuantity', 'arrivalQuantity', 'receiptQuantity',
+    'unitPrice', 'amount', 'pieceRatio'] : ['packageQuantity', 'quantity', 'taxIncludedUnitPrice', 'taxIncludedAmount']
   return extraction.items.every(item => object(item) && typeof item.productName === 'string'
     && itemStrings.every(key => nullableString(item[key]))
     && itemNumbers.every(key => item[key] === null || finite(item[key]))
@@ -89,16 +96,16 @@ function validFill(value: unknown): value is ErpAutofillResult {
 }
 
 function validStored(value: unknown, taskId: string): value is StoredTask {
-  if (!object(value) || value.version !== 1 || typeof value.sourceName !== 'string' || !SOURCE.test(value.sourceName)
+  if (!object(value) || value.version !== 2 || typeof value.sourceName !== 'string' || !SOURCE.test(value.sourceName)
     || !object(value.task)) return false
   const task = value.task
-  return task.taskId === taskId && typeof task.batchId === 'string' && UUID.test(task.batchId)
+  return isQueueBusiness(task.businessId) && task.taskId === taskId && typeof task.batchId === 'string' && UUID.test(task.batchId)
     && ['sequence', 'createdAt', 'updatedAt', 'revision'].every(key => finite(task[key]))
     && typeof task.fileName === 'string' && typeof task.message === 'string'
     && RECOGNITION.has(String(task.recognitionStatus)) && USAGE.has(String(task.usageStatus))
     && nullableString(task.supplierName) && nullableString(task.sourceOrderNumber) && nullableString(task.boundPageId)
     && typeof task.readyForAutofill === 'boolean' && (task.lastFill === null || validFill(task.lastFill))
-    && (task.result === null || validResult(task.result))
+    && (task.result === null || validResult(task.result, task.businessId))
     && (task.recognitionStatus !== 'ready' || task.result !== null)
     && (task.progress === null || (object(task.progress) && STAGES.has(String(task.progress.stage))
       && finite(task.progress.current) && finite(task.progress.total) && typeof task.progress.message === 'string'))
@@ -170,8 +177,9 @@ export class PurchaseQueueManager {
     return path
   }
 
-  async enqueue(owner: string, paths: string[]): Promise<PurchaseQueueImportResult> {
+  async enqueue(owner: string, paths: string[], businessId: QueueBusinessId = 'purchase-order'): Promise<PurchaseQueueImportResult> {
     if (this.stopped) throw new Error('客户端正在退出')
+    if (!isQueueBusiness(businessId)) throw new Error('该业务不支持批量识别')
     this.activate(owner)
     const queue = this.load(owner)
     const batchId = randomUUID()
@@ -198,13 +206,13 @@ export class PurchaseQueueManager {
         if (queue.removed || this.stopped) throw new Error('导入已停止')
         const timestamp = Date.now()
         const task: PurchaseQueueTaskDetail = {
-          taskId, batchId, sequence: index + 1, fileName: basename(filePath), createdAt: timestamp,
+          businessId, taskId, batchId, sequence: index + 1, fileName: basename(filePath), createdAt: timestamp,
           updatedAt: timestamp, revision: 0, recognitionStatus: queue.active ? 'queued' : 'paused',
           usageStatus: 'available', progress: null, message: queue.active ? '等待识别' : '已暂停，登录后继续识别',
           supplierName: null, sourceOrderNumber: null, readyForAutofill: false,
           boundPageId: null, lastFill: null, result: null
         }
-        this.save(owner, { version: 1, sourceName, task })
+        this.save(owner, { version: 2, sourceName, task })
         imported.added.push(taskId)
         directory = null
         this.pump()
@@ -293,10 +301,11 @@ export class PurchaseQueueManager {
     }
   }
 
-  beginFill(owner: string, taskId: string, pageId: string): PurchaseQueueTaskDetail {
+  beginFill(owner: string, taskId: string, pageId: string, businessId: QueueBusinessId = 'purchase-order'): PurchaseQueueTaskDetail {
     if (!pageId || this.stopped) throw new Error('当前单据页不可用')
     const record = this.find(owner, taskId)
     const { task } = record
+    if (task.businessId !== businessId) throw new Error('识别结果与当前业务不一致，已拒绝代填')
     if (task.recognitionStatus !== 'ready' || !task.readyForAutofill || !task.result?.extractedData?.readyForAutofill) {
       throw new Error('该票据尚未具备代填条件，请先复核识别结果')
     }
@@ -304,7 +313,7 @@ export class PurchaseQueueManager {
     if (task.boundPageId && task.boundPageId !== pageId) throw new Error('该票据已绑定其他单据页')
     if (task.usageStatus !== 'available' && task.boundPageId !== pageId) throw new Error('该票据已有代填记录，请先核对并放回待处理')
     if ([...this.load(owner).tasks.values()].some(other => other.task.taskId !== taskId && other.task.boundPageId === pageId)) {
-      throw new Error('当前单据页已绑定另一张票据，请新建采购订单')
+      throw new Error('当前单据页已绑定另一张票据，请新建对应业务的单据')
     }
     this.change(owner, record, { usageStatus: 'filling', boundPageId: pageId, message: '正在代填' })
     this.fills.set(this.jobKey(owner, taskId), pageId)
@@ -360,7 +369,7 @@ export class PurchaseQueueManager {
   }
 
   private ownerDirectory(owner: string): string {
-    if (!owner) throw new Error('缺少采购队列账号身份')
+    if (!owner) throw new Error('缺少票据队列账号身份')
     return join(this.root, createHash('sha256').update(owner).digest('hex'))
   }
 
@@ -389,7 +398,12 @@ export class PurchaseQueueManager {
       try {
         const path = join(directory, entry.name, 'task.json')
         const record: unknown = JSON.parse(readFileSync(path, 'utf8'))
-        if (!validStored(record, entry.name)) throw new Error('无效的采购缓存内容')
+        // Version 1 only contained purchase orders; migrate without re-recognition.
+        if (object(record) && record.version === 1 && object(record.task) && record.task.businessId === undefined) {
+          record.version = 2
+          record.task.businessId = 'purchase-order'
+        }
+        if (!validStored(record, entry.name)) throw new Error('无效的票据缓存内容')
         const source = join(directory, entry.name, record.sourceName)
         if (!lstatSync(source).isFile() || lstatSync(source).isSymbolicLink()) throw new Error('缓存原图缺失')
         const task = record.task
@@ -402,7 +416,7 @@ export class PurchaseQueueManager {
         task.boundPageId = null
         const extraction = task.result?.extractedData
         task.readyForAutofill = task.recognitionStatus === 'ready' && extraction?.readyForAutofill === true
-        task.supplierName = extraction?.documentType === 'purchase-order' ? extraction.header.supplierName : null
+        task.supplierName = extraction && isQueueBusiness(extraction.documentType) && 'supplierName' in extraction.header ? extraction.header.supplierName : null
         task.sourceOrderNumber = extraction?.documentType === 'purchase-order' ? extraction.header.sourceOrderNumber : null
         this.save(owner, record, false)
       } catch {
@@ -505,7 +519,7 @@ export class PurchaseQueueManager {
         lastProgressAt = Date.now()
         try { this.change(owner, current, { progress: structuredClone(progress), message: progress.message }) }
         catch { /* The final result still has to pass durable persistence before becoming ready. */ }
-      }, { businessId: 'purchase-order', excludedPages: [], signal: job.controller.signal })
+      }, { businessId: record.task.businessId, excludedPages: [], signal: job.controller.signal })
       const current = this.current(job)
       if (!current) return
       if (response.status !== 'completed') {
@@ -515,16 +529,18 @@ export class PurchaseQueueManager {
         })
         return
       }
-      if (!validResult(response.result)) throw new Error('识别结果格式无效或不属于采购订单')
+      if (!validResult(response.result, current.task.businessId)) throw new Error('识别结果格式无效或与任务业务不匹配')
       const result = structuredClone(response.result)
       result.fileName = current.task.fileName
       const extraction = result.extractedData
-      if (extraction && extraction.documentType !== 'purchase-order') throw new Error('识别结果业务类型不匹配')
+      if (extraction && (extraction.documentType === 'unit-initial-approval' || extraction.documentType !== current.task.businessId)) {
+        throw new Error('识别结果业务类型不匹配')
+      }
       this.change(owner, current, {
         recognitionStatus: 'ready', result, progress: null,
         readyForAutofill: extraction?.readyForAutofill === true,
         supplierName: extraction?.header.supplierName ?? null,
-        sourceOrderNumber: extraction?.header.sourceOrderNumber ?? null,
+        sourceOrderNumber: extraction?.documentType === 'purchase-order' ? extraction.header.sourceOrderNumber : null,
         message: extraction?.readyForAutofill ? '识别完成，可以复核并代填' : '识别完成，需要核对字段'
       })
     } catch (error) {

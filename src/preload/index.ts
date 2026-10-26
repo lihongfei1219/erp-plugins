@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { installFileDrop } from './file-drop'
+import { FILE_DROP_IPC, type FileDropApi } from '../shared/file-drop'
 import { ACCOUNT_IPC, type AccountApi } from '../shared/accounts'
 import { PURCHASE_QUEUE_IPC, type PurchaseQueueApi } from '../shared/purchase-queue'
 import {
@@ -18,13 +20,24 @@ import {
   type OcrProgress
 } from '../shared/ocr'
 
-contextBridge.exposeInMainWorld(
+const erpDropOnly = process.argv.includes('--erp-file-drop-only')
+installFileDrop(erpDropOnly)
+// The untrusted ERP only gets file-drop listeners, never account or filesystem APIs.
+if (!erpDropOnly) contextBridge.exposeInMainWorld(
   'desktop',
   Object.freeze({
     platform: process.platform,
+    files: Object.freeze({
+      onDrop: listener => {
+        const handler = (_event: Electron.IpcRendererEvent, value: Parameters<typeof listener>[0]): void => listener(value)
+        ipcRenderer.on(FILE_DROP_IPC.feedback, handler)
+        return () => ipcRenderer.removeListener(FILE_DROP_IPC.feedback, handler)
+      }
+    } satisfies FileDropApi),
     purchaseQueue: Object.freeze({
       list: () => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.list),
-      add: () => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.add),
+      add: businessId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.add, businessId),
+      addDropped: (businessId, token) => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.add, businessId, token),
       get: taskId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.get, taskId),
       retry: taskId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.retry, taskId),
       cancel: taskId => ipcRenderer.invoke(PURCHASE_QUEUE_IPC.cancel, taskId),

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import AccountManager from './AccountManager.vue'
 import PurchaseQueue from './PurchaseQueue.vue'
 import {
@@ -12,6 +12,7 @@ import {
 } from '../../shared/business'
 import type { ErpAutofillResult, ErpState } from '../../shared/erp'
 import type { OcrClientResult, OcrDocumentPreview, OcrProgress } from '../../shared/ocr'
+import type { FileDropFeedback } from '../../shared/file-drop'
 
 interface ClientWorkflowSession extends WorkflowSession {
   pageId: string
@@ -47,6 +48,35 @@ const erpState = ref<ErpState>({
   openPageIds: []
 })
 const assistantCollapsed = ref(false)
+const queuePanel = ref<InstanceType<typeof PurchaseQueue> | null>(null)
+const dropError = ref('')
+let unsubscribeDrops: (() => void) | undefined
+let handlingDrop = false
+
+async function handleDrop(value: FileDropFeedback): Promise<void> {
+  assistantCollapsed.value = false
+  void window.desktop.erp.setAssistantWidth(400)
+  if (value.kind === 'error') { dropError.value = value.message; return }
+  if (handlingDrop) { dropError.value = '正在导入上一批文件，请完成后重新拖入'; return }
+  handlingDrop = true
+  dropError.value = ''
+  try {
+    await nextTick()
+    const page = erpState.value.currentPage
+    if (page?.businessId !== value.businessId || page.pageId !== value.pageId) throw new Error('业务页面已切换，请在目标页面重新拖入')
+    if (document.querySelector('.preview-backdrop') || recognitionRunning.value || autofillStatus.value === 'running') {
+      throw new Error('请先完成当前识别、代填或关闭预览，再拖入新文件')
+    }
+    if (value.businessId === 'unit-initial-approval') await selectDocument(value.token)
+    else {
+      if (!queuePanel.value) throw new Error('票据队列尚未就绪，请稍后重新拖入')
+      await queuePanel.value.importDropped(value.token)
+    }
+  } catch (error) {
+    dropError.value = error instanceof Error ? error.message : '导入失败，请重新拖入'
+  } finally { handlingDrop = false }
+}
+onBeforeUnmount(() => unsubscribeDrops?.())
 const sessions = ref<Record<string, ClientWorkflowSession>>({})
 const activeSessionId = ref<string | null>(null)
 const focusedPreviewPage = ref<OcrDocumentPreview['pages'][number] | null>(null)
@@ -63,7 +93,7 @@ const statusLabel = computed(() => {
   return labels[erpState.value.status]
 })
 const currentBusinessId = computed(() => erpState.value.currentPage?.businessId ?? null)
-const isPurchaseOrder = computed(() => currentBusinessId.value === 'purchase-order')
+const isQueueBusinessPage = computed(() => currentBusinessId.value === 'purchase-order' || currentBusinessId.value === 'goods-receipt')
 const currentBusiness = computed(() => {
   const businessId = currentBusinessId.value
   return businessId ? BUSINESS_DEFINITIONS[businessId] : null
@@ -204,7 +234,7 @@ function toggleAssistant(): void {
 
 async function fillFixture(): Promise<void> {
   const businessId = currentBusinessId.value
-  if (!businessId || businessId === 'purchase-order' || !currentPageReady.value) return
+  if (!businessId || (businessId === 'purchase-order' || businessId === 'goods-receipt') || !currentPageReady.value) return
   autofillStatus.value = 'running'
   autofillResult.value = null
   try {
@@ -220,9 +250,9 @@ async function fillFixture(): Promise<void> {
   }
 }
 
-async function selectDocument(): Promise<void> {
+async function selectDocument(dropToken?: string): Promise<void> {
   const businessId = currentBusinessId.value
-  if (!businessId || businessId === 'purchase-order' || !currentPageReady.value) return
+  if (!businessId || (businessId === 'purchase-order' || businessId === 'goods-receipt') || !currentPageReady.value) return
   const session = createSession(businessId)
   autofillResult.value = null
   patchSession(session.sessionId, {
@@ -233,7 +263,7 @@ async function selectDocument(): Promise<void> {
     }
   })
   try {
-    const result = await window.desktop.ocr.selectDocument({ sessionId: session.sessionId, businessId, pageId: session.pageId })
+    const result = await window.desktop.ocr.selectDocument({ sessionId: session.sessionId, businessId, pageId: session.pageId, dropToken })
     if (result.status === 'cancelled') {
       patchSession(session.sessionId, { status: 'ready', progress: null })
       return
@@ -296,7 +326,7 @@ function cancelDocumentPreview(): void {
 async function startExtraction(): Promise<void> {
   const session = activeSession.value
   const preview = session?.preview
-  if (!session || session.businessId === 'purchase-order' || !preview || selectedPageCount.value === 0) return
+  if (!session || (session.businessId === 'purchase-order' || session.businessId === 'goods-receipt') || !preview || selectedPageCount.value === 0) return
   const excludedPages = [...excludedPageNumbers.value]
   patchSession(session.sessionId, {
     status: 'recognizing', preview: null, selectedPageNumbers: [], result: null,
@@ -324,7 +354,7 @@ async function startExtraction(): Promise<void> {
 
 async function confirmAutofill(): Promise<void> {
   const session = activeSession.value
-  if (!session || session.businessId === 'purchase-order' || !canConfirmAutofill.value) return
+  if (!session || (session.businessId === 'purchase-order' || session.businessId === 'goods-receipt') || !canConfirmAutofill.value) return
   patchSession(session.sessionId, { status: 'filling' })
   autofillStatus.value = 'running'
   autofillResult.value = null
@@ -347,6 +377,7 @@ async function confirmAutofill(): Promise<void> {
 
 onMounted(async () => {
   if (isAccountManager) return
+  unsubscribeDrops = window.desktop.files.onDrop(value => { void handleDrop(value) })
   erpState.value = await window.desktop.erp.getState()
   await window.desktop.erp.setAssistantWidth(400)
   window.desktop.erp.onStateChanged((state) => {
@@ -403,6 +434,7 @@ onMounted(async () => {
         {{ assistantCollapsed ? '‹' : '›' }}
       </button>
       <div v-if="!assistantCollapsed" class="assistant-content">
+        <p v-if="dropError" class="account-error" data-testid="file-drop-error" role="alert">{{ dropError }}</p>
         <p v-if="accountActionError" class="account-error" role="alert">{{ accountActionError }}</p>
         <header class="context-card" :data-supported="currentPageReady">
           <div>
@@ -414,15 +446,15 @@ onMounted(async () => {
           <span>{{ currentPageReady ? '已就绪' : '不可代填' }}</span>
         </header>
 
-        <PurchaseQueue :erp-state="erpState" />
+        <PurchaseQueue ref="queuePanel" :erp-state="erpState" />
 
-        <ol v-if="!isPurchaseOrder" class="workflow-steps" aria-label="票据处理步骤">
+        <ol v-if="!isQueueBusinessPage" class="workflow-steps" aria-label="票据处理步骤">
           <li v-for="step in workflowSteps" :key="step.number" :data-active="workflowStep === step.number" :data-completed="workflowStep > step.number">
             <span>{{ workflowStep > step.number ? '✓' : step.number }}</span><small>{{ step.label }}</small>
           </li>
         </ol>
 
-        <section v-if="!currentPageReady && !isPurchaseOrder" class="panel-state">
+        <section v-if="!currentPageReady && !isQueueBusinessPage" class="panel-state">
           <div class="state-icon">⌁</div><strong>当前页面没有可用的代填任务</strong>
           <p>进入以下任一业务的新建页后，助手会自动切换，不会沿用其他业务的数据。</p>
           <div class="supported-businesses">
@@ -432,11 +464,12 @@ onMounted(async () => {
           </div>
         </section>
 
-        <template v-else-if="currentPageReady && !isPurchaseOrder">
+        <template v-else-if="currentPageReady && !isQueueBusinessPage">
           <section v-if="!activeSession || activeSession.status === 'ready'" class="intake-card">
             <p class="eyebrow">DOCUMENT INTAKE</p><h3>选择{{ currentBusiness?.documentName }}</h3>
             <p>识别结果暂存在当前单据页，关闭该单据页后自动清除。</p>
-            <button type="button" class="primary-button" :disabled="recognitionRunning" @click="selectDocument">选择票据并筛选页面</button>
+            <button type="button" class="primary-button" :disabled="recognitionRunning" @click="selectDocument()">选择票据并筛选页面</button>
+            <p class="purchase-hint">也可拖入一个图片或 PDF，继续按原流程预览和筛选页面。</p>
             <button type="button" class="secondary-button" :disabled="autofillStatus === 'running'" @click="fillFixture">使用{{ currentBusiness?.fixtureName }}</button>
           </section>
 
@@ -458,7 +491,7 @@ onMounted(async () => {
 
           <section v-if="activeSession?.status === 'failed'" class="result-state" data-error="true">
             <strong>识别未完成</strong><p>{{ ocrResult?.message ?? '当前会话处理失败' }}</p>
-            <button type="button" class="secondary-button" @click="selectDocument">重新选择票据</button>
+            <button type="button" class="secondary-button" @click="selectDocument()">重新选择票据</button>
           </section>
 
           <template v-if="extractedData && activeSession && ['reviewing', 'filling', 'completed'].includes(activeSession.status)">
@@ -526,24 +559,24 @@ onMounted(async () => {
         </template>
 
         <div v-if="erpState.message" class="notice" :data-error="erpState.status === 'error'">{{ erpState.message }}</div>
-        <div v-if="autofillResult && !isPurchaseOrder" class="notice" :data-error="autofillStatus === 'error'" aria-live="polite">
+        <div v-if="autofillResult && !isQueueBusinessPage" class="notice" :data-error="autofillStatus === 'error'" aria-live="polite">
           <strong>{{ autofillStatus === 'success' ? '代填完成' : '代填未完成' }}</strong><span>{{ autofillResult.message }}</span>
           <small v-if="autofillResult.skippedFields.length">未填：{{ autofillResult.skippedFields.join('、') }}</small>
         </div>
 
-        <footer v-if="!isPurchaseOrder && activeSession?.status === 'reviewing'" class="action-bar">
-          <button type="button" class="secondary-button" @click="selectDocument">重新选择</button>
+        <footer v-if="!isQueueBusinessPage && activeSession?.status === 'reviewing'" class="action-bar">
+          <button type="button" class="secondary-button" @click="selectDocument()">重新选择</button>
           <button type="button" class="primary-button" :disabled="!canConfirmAutofill" @click="confirmAutofill">{{ autofillResult && autofillResult.status !== 'filled' ? '重试代填' : '确认并代填' }}</button>
         </footer>
-        <footer v-else-if="!isPurchaseOrder && activeSession?.status === 'completed'" class="action-bar completed-action">
+        <footer v-else-if="!isQueueBusinessPage && activeSession?.status === 'completed'" class="action-bar completed-action">
           <span>已代填，请在 ERP 中核对后手动保存。误删内容可直接重新代填，无需再次识别。</span>
-          <button type="button" class="secondary-button" @click="selectDocument">新任务</button>
+          <button type="button" class="secondary-button" @click="selectDocument()">新任务</button>
           <button type="button" class="primary-button" :disabled="!canConfirmAutofill" @click="confirmAutofill">重新代填</button>
         </footer>
       </div>
     </aside>
 
-    <div v-if="currentPreview && !isPurchaseOrder" class="preview-backdrop" role="presentation" @click.self="cancelDocumentPreview">
+    <div v-if="currentPreview && !isQueueBusinessPage" class="preview-backdrop" role="presentation" @click.self="cancelDocumentPreview">
       <section class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title">
         <header class="preview-header">
           <div><p class="eyebrow">LOCAL PRIVACY FILTER · {{ currentBusiness?.name }}</p><h2 id="preview-title">上传前排除高敏页面</h2><p>{{ currentPreview.fileName }} · 共 {{ currentPreview.pageCount }} 页</p></div>

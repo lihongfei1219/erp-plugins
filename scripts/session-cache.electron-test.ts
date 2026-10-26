@@ -8,8 +8,8 @@ import { ErpViewController } from '../src/main/erp-view'
 import { WorkflowSessionManager } from '../src/main/workflow-session-manager'
 import { ERP_IPC } from '../src/shared/erp'
 import { OCR_IPC } from '../src/shared/ocr'
-import { normalizeGoodsReceiptSubmission } from '../src/main/businesses/goods-receipt-tool'
-import fixture from '../test-data/goods-receipt.ckfh26070523.json'
+import { normalizeUnitInitialApprovalSubmission } from '../src/main/agent/unit-initial-approval-tool'
+import fixture from '../test-data/unit-initial-approval.example.json'
 
 const reportPath = resolve('tmp/session-cache-electron-result.json')
 mkdirSync(resolve('tmp'), { recursive: true })
@@ -35,13 +35,13 @@ async function run(): Promise<void> {
   const server = createServer((request, response) => {
     response.setHeader('Content-Type', 'text/html; charset=utf-8')
     response.end(request.url === '/' ? '<iframe id="a" src="/form" style="width:800px;height:600px"></iframe><iframe id="b" src="/form" style="display:none;width:800px;height:600px"></iframe>' : `
-      <input id="Ename" value="SPSHDJ"><input id="Cname" value="商品收货登记"><input id="Mode" value="Add">
-      ${['DWMC', 'DWBH', 'QYRQ', 'CYDW', 'CYFS', 'SHDJBZ'].map(id => `<input id="${id}">`).join('')}
+      <input id="Ename" value="DWSYSP"><input id="Cname" value="单位首营审批"><input id="Mode" value="Add">
+      ${'DWMC DWBH YYZZH ZCDZ CKDZ DWDH DWLX CGYXM CGYSFZ GSKPLX GSKHMC GSKHZH SPLXDH GSKHYH GSKHSH ZTRXM ZTRSFZH ZZDQRQ ZZDQTX JYFW SDKCQK DWFDDBR DWZLFZR DWQYFZR SHRY SHDH SHDZ'.split(' ').map(id => `<input id="${id}">`).join('')}
       <script>
         const rows = [];
         window.gridEditBody = { getRows: () => rows };
         window.gridhandler = () => {
-          const cells = Object.fromEntries('SPMC SPBH GG SCCS DW DJ DHSL SHSL JSSL SPPH SCRQ YXQZ SPM JX BZ'.split(' ').map(key => [key, {
+          const cells = Object.fromEntries('ZLLX ZSBH FZJG FZRQ DQRQ DQKZ ZLTG'.split(' ').map(key => [key, {
             value: '', setValue(value) { this.value = value }, getValue() { return this.value }
           }]));
           rows.push({ cells: () => cells });
@@ -60,7 +60,7 @@ async function run(): Promise<void> {
   const erp = (window.contentView.children[0] as WebContentsView).webContents
   let recognitions = 0
   const filledSessionIds: string[] = []
-  const extraction = normalizeGoodsReceiptSubmission({ header: fixture.erpPayload.header, items: fixture.erpPayload.items.map(item => ({ ...item, sourcePages: [1] })), evidence: [], reviewRequired: [] }, 1)
+  const extraction = normalizeUnitInitialApprovalSubmission({ header: { ...fixture.erpPayload.header, businessScope: [] }, qualificationRows: fixture.erpPayload.qualificationRows.map(item => ({ ...item, materialProvided: true, sourcePages: [1] })), evidence: [], reviewRequired: [] }, 1)
   ipcMain.handle(ERP_IPC.getState, () => controller.getState())
   ipcMain.handle(ERP_IPC.setAssistantWidth, () => {})
   ipcMain.handle(OCR_IPC.selectDocument, (_event, request) => {
@@ -70,7 +70,7 @@ async function run(): Promise<void> {
   ipcMain.handle(OCR_IPC.extractDocument, (_event, request) => {
     recognitions++
     sessions.complete(request.sessionId, request.businessId, extraction)
-    return { status: 'completed', message: '', result: { businessId: 'goods-receipt', fileName: 'receipt.png', pageCount: 1, coveragePercent: 100, pages: [], warnings: [], extractedData: extraction } }
+    return { status: 'completed', message: '', result: { businessId: 'unit-initial-approval', fileName: 'receipt.png', pageCount: 1, coveragePercent: 100, pages: [], warnings: [], extractedData: extraction } }
   })
   ipcMain.handle(ERP_IPC.fillSession, async (_event, request) => {
     filledSessionIds.push(request.sessionId)
@@ -95,15 +95,15 @@ async function run(): Promise<void> {
   await until(() => filledSessionIds.length === 2 && buttonVisible('重新代填'))
   assert.equal(recognitions, 1)
   assert.equal(new Set(filledSessionIds).size, 1)
-  assert.equal(await erp.executeJavaScript(`document.getElementById('a').contentWindow.gridEditBody.getRows().length`), 7)
-  report.push('Actual renderer repeats autofill from the same cached session, restoring 7 deleted rows with only one recognition')
+  assert.equal(await erp.executeJavaScript(`document.getElementById('a').contentWindow.gridEditBody.getRows().length`), extraction.qualificationRows.length)
+  report.push('Actual renderer repeats autofill from the same cached session, restoring deleted qualification rows with only one recognition')
 
   await erp.executeJavaScript(`document.getElementById('a').style.display='none';document.getElementById('b').style.display='block'`)
   await until(() => controller.getState().currentPage?.pageId !== original)
   await until(() => buttonVisible('选择票据并筛选页面'))
   assert.equal(await buttonVisible('重新代填'), false)
-  assert.equal(sessions.getExtraction(filledSessionIds[0], 'goods-receipt'), extraction)
-  const wrongPage = await controller.fillExtractedData('goods-receipt', extraction, original)
+  assert.equal(sessions.getExtraction(filledSessionIds[0], 'unit-initial-approval'), extraction)
+  const wrongPage = await controller.fillExtractedData('unit-initial-approval', extraction, original)
   assert.equal(wrongPage.status, 'wrong-page')
   await erp.executeJavaScript(`document.getElementById('b').style.display='none';document.getElementById('a').style.display='block'`)
   await until(() => buttonVisible('重新代填'))
@@ -111,8 +111,8 @@ async function run(): Promise<void> {
 
   await erp.executeJavaScript(`document.getElementById('a').remove();document.getElementById('b').style.display='block'`)
   await until(() => !controller.getState().openPageIds.includes(original))
-  assert.throws(() => sessions.getExtraction(filledSessionIds[0], 'goods-receipt'))
-  assert.throws(() => sessions.complete(filledSessionIds[0], 'goods-receipt', extraction))
+  assert.throws(() => sessions.getExtraction(filledSessionIds[0], 'unit-initial-approval'))
+  assert.throws(() => sessions.complete(filledSessionIds[0], 'unit-initial-approval', extraction))
   await until(() => buttonVisible('选择票据并筛选页面'))
   report.push('Removing an ERP iframe without navigation clears its cache and rejects late recognition completion')
 

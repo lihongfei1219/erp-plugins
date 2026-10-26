@@ -1,5 +1,6 @@
 import { BrowserWindow, WebContentsView, dialog } from 'electron'
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import type { ErpConfig } from './erp-config'
 import {
   buildExtractedAutofillScript,
@@ -61,6 +62,8 @@ export class ErpViewController {
     this.view = new WebContentsView({
       webPreferences: {
         partition: options.partition ?? 'persist:erp-session',
+        preload: join(__dirname, '../preload/index.js'),
+        additionalArguments: ['--erp-file-drop-only'],
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true
@@ -90,6 +93,11 @@ export class ErpViewController {
 
   getState(): ErpState {
     return { ...this.state }
+  }
+
+  acceptsFileDrop(event: Electron.IpcMainEvent): boolean {
+    return Boolean(this.view && !this.disposed && event.sender === this.view.webContents &&
+      event.senderFrame === this.view.webContents.mainFrame && this.isAllowedUrl(event.senderFrame.url))
   }
 
   retryLogin(): void { this.login?.retry() }
@@ -143,9 +151,13 @@ export class ErpViewController {
   }
 
   async assertPurchaseOrderEmpty(pageId: string): Promise<void> {
+    return this.assertQueuePageEmpty('purchase-order', pageId)
+  }
+
+  async assertQueuePageEmpty(businessId: 'purchase-order' | 'goods-receipt', pageId: string): Promise<void> {
     this.assertAccountReady()
-    const detected = await this.findBusinessFrame('purchase-order')
-    if (!detected || detected.context.pageId !== pageId) throw new Error('采购订单页面已切换')
+    const detected = await this.findBusinessFrame(businessId)
+    if (!detected || detected.context.pageId !== pageId) throw new Error('单据页面已切换')
     const empty = await detected.frame.executeJavaScript(`(() => {
       if (document[Symbol.for('erp-ocr.document-id')] !== ${JSON.stringify(pageId)}) return false;
       const text = value => String(value ?? '').trim();
@@ -154,13 +166,13 @@ export class ErpViewController {
       if (!grid || typeof grid.getRows !== 'function') return false;
       return grid.getRows().every(row => {
         const cells = typeof row.cells === 'function' ? row.cells() : {};
-        return ['SPBH', 'SPMC', 'GG', 'SCCS'].every(key => {
+        return ['SPBH', 'SPMC', 'GG', 'SCCS', 'SPPH'].every(key => {
           const cell = cells[key];
           return !text(typeof cell?.getValue === 'function' ? cell.getValue() : cell?.value);
         });
       });
     })()`, true)
-    if (empty !== true) throw new Error('当前采购订单已有供应商或商品内容，请新建空白订单后使用这张票据')
+    if (empty !== true) throw new Error('当前单据已有供应商或商品内容，请新建空白单据后使用这张票据')
   }
 
   async fillExtractedData(

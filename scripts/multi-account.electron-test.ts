@@ -55,7 +55,7 @@ async function run(): Promise<void> {
     }
     if (!user) { response.end(loginPage()); return }
     if (request.url === '/Login.aspx') { response.writeHead(302, { Location: '/Default.aspx' }); response.end(); return }
-    response.end(`<div data-erp-username="${user}">${user}</div><a href="/Logout.aspx">退出登录</a><input id="Ename" value="SPSHDJ"><input id="Cname" value="商品收货登记"><input id="Mode" value="Add"><input id="DWMC">`)
+    response.end(`<div data-erp-username="${user}">${user}</div><a href="/Logout.aspx">退出登录</a><input id="Ename" value="DWSYSP"><input id="Cname" value="单位首营审批"><input id="Mode" value="Add"><input id="DWMC">`)
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address() as { port: number }
@@ -127,16 +127,16 @@ async function run(): Promise<void> {
   await until(() => !!context(windows[0]).erpController.getState().currentPage?.pageId)
   const first = context(windows[0]), second = context(windows[1])
   const pageId = first.erpController.getState().currentPage!.pageId!
-  first.workflowSessions.bindToPage('window-one-only', 'goods-receipt', pageId)
-  first.workflowSessions.complete('window-one-only', 'goods-receipt', { documentType: 'goods-receipt' } as BusinessExtraction)
-  const forged = await windows[1].webContents.executeJavaScript(`window.desktop.erp.fillSession({ sessionId: 'window-one-only', businessId: 'goods-receipt' })`)
+  first.workflowSessions.bindToPage('window-one-only', 'unit-initial-approval', pageId)
+  first.workflowSessions.complete('window-one-only', 'unit-initial-approval', { documentType: 'unit-initial-approval' } as BusinessExtraction)
+  const forged = await windows[1].webContents.executeJavaScript(`window.desktop.erp.fillSession({ sessionId: 'window-one-only', businessId: 'unit-initial-approval' })`)
   assert.equal(forged.status, 'failed')
-  assert.throws(() => second.workflowSessions.getExtraction('window-one-only', 'goods-receipt'))
+  assert.throws(() => second.workflowSessions.getExtraction('window-one-only', 'unit-initial-approval'))
   checks.push('Sender-based IPC rejects cross-window extraction and unauthorized account/ERP endpoints')
 
   await erp(windows[2]).executeJavaScript('document.querySelector("[data-erp-username]").setAttribute("data-erp-username", "another-user")')
   await until(async () => (await windows[2].webContents.executeJavaScript('window.desktop.erp.getState()')).account.status === 'mismatch')
-  const blocked = await windows[2].webContents.executeJavaScript('window.desktop.erp.fillFixture({businessId:"goods-receipt"})')
+  const blocked = await windows[2].webContents.executeJavaScript('window.desktop.erp.fillFixture({businessId:"unit-initial-approval"})')
   assert.equal(blocked.status, 'wrong-page')
   await erp(windows[2]).executeJavaScript('document.querySelector("[data-erp-username]").setAttribute("data-erp-username", "user3")')
   await until(async () => (await windows[2].webContents.executeJavaScript('window.desktop.erp.getState()')).account.status === 'signed-in')
@@ -147,7 +147,7 @@ async function run(): Promise<void> {
   await erp(windows[0]).executeJavaScript(`window.testBeforeUnload = event => { event.preventDefault(); event.returnValue = 'unsaved'; }; window.addEventListener('beforeunload', window.testBeforeUnload); document.querySelector('a').click()`, true)
   await new Promise(resolve => setTimeout(resolve, 1200))
   assert.equal((await windows[0].webContents.executeJavaScript('window.desktop.erp.getState()')).account.status, 'signed-in')
-  assert.equal(first.workflowSessions.getExtraction('window-one-only', 'goods-receipt').documentType, 'goods-receipt')
+  assert.equal(first.workflowSessions.getExtraction('window-one-only', 'unit-initial-approval').documentType, 'unit-initial-approval')
   await erp(windows[0]).executeJavaScript('window.removeEventListener("beforeunload", window.testBeforeUnload)')
   dialog.showMessageBoxSync = originalDialog
   checks.push('Cancelling the ERP leave prompt preserves both login and the original recognition cache')
@@ -172,15 +172,15 @@ async function run(): Promise<void> {
   // A pending request must receive only its own progress and stop when its window closes.
   await first.erpController.refreshPageContext()
   const currentPage = first.erpController.getState().currentPage!.pageId!
-  first.workflowSessions.bindToPage('cancel-on-close', 'goods-receipt', currentPage)
-  first.workflowSessions.setPending({ sessionId: 'cancel-on-close', businessId: 'goods-receipt', token: 'local-test-token', filePath: 'synthetic', pageCount: 1 })
+  first.workflowSessions.bindToPage('cancel-on-close', 'unit-initial-approval', currentPage)
+  first.workflowSessions.setPending({ sessionId: 'cancel-on-close', businessId: 'unit-initial-approval', token: 'local-test-token', filePath: 'synthetic', pageCount: 1 })
   await windows[1].webContents.executeJavaScript('window.testProgress = []; window.desktop.ocr.onProgress(p => window.testProgress.push(p))')
-  void windows[0].webContents.executeJavaScript(`window.desktop.ocr.extractDocument({sessionId:'cancel-on-close',businessId:'goods-receipt',token:'local-test-token',excludedPages:[]})`).catch(() => {})
+  void windows[0].webContents.executeJavaScript(`window.desktop.ocr.extractDocument({sessionId:'cancel-on-close',businessId:'unit-initial-approval',token:'local-test-token',excludedPages:[]})`).catch(() => {})
   await new Promise(resolve => setTimeout(resolve, 300))
   assert.equal(await windows[1].webContents.executeJavaScript('window.testProgress.length'), 0)
   windows[0].close()
   await until(() => cancelObserved && work().length === accountCount - 1)
-  assert.throws(() => first.workflowSessions.getPageId('cancel-on-close', 'goods-receipt'))
+  assert.throws(() => first.workflowSessions.getPageId('cancel-on-close', 'unit-initial-approval'))
   checks.push('Closing one window cancels its extraction; progress and cleanup never reach another window')
 
   const before = posts.get('user1')

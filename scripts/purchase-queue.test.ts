@@ -8,6 +8,84 @@ import { PurchaseQueueManager } from '../src/main/purchase-queue'
 import type { DocumentExtractionClient } from '../src/main/document-extraction-client'
 import type { DocumentExtractionOptions, OcrClientResult, OcrDocumentResult, OcrProgress } from '../src/shared/ocr'
 import type { ErpAutofillResult } from '../src/shared/erp'
+import { normalizeGoodsReceiptSubmission } from '../src/main/businesses/goods-receipt-tool'
+
+function goodsDocument(): OcrDocumentResult {
+  return { ...document(), businessId: 'goods-receipt', extractedData: normalizeGoodsReceiptSubmission({
+    header: { supplierName: '合成收货供应商' },
+    items: [{ productName: '合成收货商品', arrivalQuantity: 5, receiptQuantity: 4, sourcePages: [1] }],
+    evidence: [], reviewRequired: []
+  }, 1) }
+}
+
+test('goods receipts fill independently while later images run, persist and reuse without OCR', async t => {
+  const { manager, client, source, root } = fixture(t)
+  const { added } = await manager.enqueue(OWNER, [source('receipt-a.png'), source('receipt-b.png')], 'goods-receipt')
+  assert.equal(client.calls.length, 2)
+  assert.ok(client.calls.every(call => call.options.businessId === 'goods-receipt' && call.options.excludedPages?.length === 0))
+  client.complete(0, goodsDocument())
+  await eventually(() => manager.get(OWNER, added[0]).recognitionStatus === 'ready')
+  assert.equal(manager.get(OWNER, added[1]).recognitionStatus, 'recognizing')
+  assert.throws(() => manager.beginFill(OWNER, added[0], 'purchase-page', 'purchase-order'), /业务不一致/)
+  assert.equal(manager.get(OWNER, added[0]).usageStatus, 'available')
+  manager.beginFill(OWNER, added[0], 'receipt-page-a', 'goods-receipt')
+  manager.finishFill(OWNER, added[0], filled)
+  manager.retainPages(OWNER, [])
+  client.complete(1, goodsDocument())
+  await eventually(() => manager.get(OWNER, added[1]).recognitionStatus === 'ready')
+  manager.shutdown()
+  const restored = new PurchaseQueueManager(root, client, () => {})
+  t.after(() => restored.shutdown())
+  restored.activate(OWNER)
+  assert.equal(restored.get(OWNER, added[0]).usageStatus, 'filled')
+  assert.equal(restored.get(OWNER, added[1]).supplierName, '合成收货供应商')
+  restored.beginFill(OWNER, added[1], 'receipt-page-b', 'goods-receipt')
+  restored.finishFill(OWNER, added[1], filled)
+  assert.equal(client.calls.length, 2)
+  assert.throws(() => restored.get(OTHER, added[1]), /不属于/)
+})
+
+test('mixed businesses share the concurrency budget; wrong results fail only their task and retries keep business', async t => {
+  const { manager, client, source } = fixture(t, { concurrency: 1 })
+  const receipt = (await manager.enqueue(OWNER, [source('receipt.png')], 'goods-receipt')).added[0]
+  const purchase = (await manager.enqueue(OWNER, [source('purchase.png')])).added[0]
+  assert.equal(client.calls.length, 1)
+  client.complete(0, document())
+  await eventually(() => manager.get(OWNER, receipt).recognitionStatus === 'failed' && client.calls.length === 2)
+  client.complete(1)
+  await eventually(() => manager.get(OWNER, purchase).recognitionStatus === 'ready')
+  manager.retry(OWNER, receipt)
+  assert.equal(client.calls[2].options.businessId, 'goods-receipt')
+  client.complete(2, goodsDocument())
+  await eventually(() => manager.get(OWNER, receipt).recognitionStatus === 'ready')
+  assert.throws(() => manager.beginFill(OWNER, purchase, 'receipt-page', 'goods-receipt'), /业务不一致/)
+  await assert.rejects(manager.enqueue(OWNER, [source('unit.png')], 'unit-initial-approval' as never), /不支持/)
+  assert.equal(manager.list(OWNER).length, 2)
+})
+
+test('version 1 purchase caches migrate and new corrupt goods caches are isolated', async t => {
+  const { manager, client, source, root, recordPath } = fixture(t)
+  const old = (await manager.enqueue(OWNER, [source('old.png')])).added[0]
+  const invalid = (await manager.enqueue(OWNER, [source('invalid.png')], 'goods-receipt')).added[0]
+  client.complete(0)
+  client.complete(1, goodsDocument())
+  await eventually(() => manager.list(OWNER).every(task => task.recognitionStatus === 'ready'))
+  manager.shutdown()
+  const legacy = JSON.parse(readFileSync(recordPath(OWNER, old), 'utf8'))
+  legacy.version = 1
+  delete legacy.task.businessId
+  writeFileSync(recordPath(OWNER, old), JSON.stringify(legacy))
+  const corrupt = JSON.parse(readFileSync(recordPath(OWNER, invalid), 'utf8'))
+  corrupt.task.result.extractedData.items[0].arrivalQuantity = 'invalid-number'
+  writeFileSync(recordPath(OWNER, invalid), JSON.stringify(corrupt))
+  const restored = new PurchaseQueueManager(root, client, () => {})
+  t.after(() => restored.shutdown())
+  assert.equal(restored.list(OWNER).length, 1)
+  assert.equal(restored.get(OWNER, old).businessId, 'purchase-order')
+  assert.equal(restored.get(OWNER, old).recognitionStatus, 'ready')
+  assert.equal(JSON.parse(readFileSync(recordPath(OWNER, old), 'utf8')).version, 2)
+  assert.equal(client.calls.length, 2)
+})
 
 const OWNER = 'https://synthetic.erp.test|synthetic-purchaser|purchase-order'
 const OTHER = 'https://synthetic.erp.test|other-purchaser|purchase-order'

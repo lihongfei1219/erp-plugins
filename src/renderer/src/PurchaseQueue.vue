@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { PurchaseOrderExtraction } from '../../shared/business'
+import { BUSINESS_DEFINITIONS, type PurchaseOrderExtraction, type GoodsReceiptExtraction } from '../../shared/business'
+import { isQueueBusiness } from '../../shared/purchase-queue'
 import type { ErpState } from '../../shared/erp'
 import type {
   PurchaseQueuePreview, PurchaseQueueTask, PurchaseQueueTaskDetail
@@ -38,36 +39,42 @@ let previewTail: Promise<void> = Promise.resolve()
 
 const accountId = computed(() => props.erpState.account?.id ?? null)
 const signedIn = computed(() => props.erpState.account?.status === 'signed-in')
-const isPurchasePage = computed(() => props.erpState.currentPage?.businessId === 'purchase-order')
-const pageId = computed(() => isPurchasePage.value ? props.erpState.currentPage?.pageId ?? null : null)
+const businessId = computed(() => {
+  const id = props.erpState.currentPage?.businessId
+  return isQueueBusiness(id) ? id : null
+})
+const isQueuePage = computed(() => businessId.value !== null)
+const businessName = computed(() => businessId.value ? BUSINESS_DEFINITIONS[businessId.value].name : '采购与收货')
+const visibleTasks = computed(() => businessId.value ? tasks.value.filter(task => task.businessId === businessId.value) : tasks.value)
+const pageId = computed(() => isQueuePage.value ? props.erpState.currentPage?.pageId ?? null : null)
 const pageReady = computed(() => Boolean(signedIn.value && pageId.value &&
   props.erpState.currentPage?.supported && props.erpState.currentPage.isNew))
-const selectedTask = computed(() => tasks.value.find(task => task.taskId === selectedId.value) ?? null)
+const selectedTask = computed(() => visibleTasks.value.find(task => task.taskId === selectedId.value) ?? null)
 const boundTask = computed(() => pageId.value
-  ? tasks.value.find(task => task.boundPageId === pageId.value) ?? null : null)
-const extraction = computed<PurchaseOrderExtraction | null>(() => {
+  ? visibleTasks.value.find(task => task.boundPageId === pageId.value) ?? null : null)
+const extraction = computed<PurchaseOrderExtraction | GoodsReceiptExtraction | null>(() => {
   const result = detail.value?.taskId === selectedId.value ? detail.value.result?.extractedData : null
-  return result?.documentType === 'purchase-order' ? result : null
+  return result && result.documentType !== 'unit-initial-approval' && result.documentType === businessId.value ? result : null
 })
 const filling = computed(() => tasks.value.some(task => task.usageStatus === 'filling') ||
   Object.values(busy.value).includes('fill'))
-const nextTask = computed(() => tasks.value.find(task => task.taskId !== selectedId.value &&
+const nextTask = computed(() => visibleTasks.value.find(task => task.taskId !== selectedId.value &&
   task.recognitionStatus === 'ready' && task.readyForAutofill && task.usageStatus === 'available' && !task.boundPageId) ?? null)
 const counts = computed(() => ({
-  total: tasks.value.length,
-  waiting: tasks.value.filter(task => task.recognitionStatus === 'queued').length,
-  running: tasks.value.filter(task => task.recognitionStatus === 'recognizing').length,
-  ready: tasks.value.filter(task => task.recognitionStatus === 'ready' && task.usageStatus === 'available' &&
+  total: visibleTasks.value.length,
+  waiting: visibleTasks.value.filter(task => task.recognitionStatus === 'queued').length,
+  running: visibleTasks.value.filter(task => task.recognitionStatus === 'recognizing').length,
+  ready: visibleTasks.value.filter(task => task.recognitionStatus === 'ready' && task.usageStatus === 'available' &&
     task.readyForAutofill && !task.boundPageId).length,
-  review: tasks.value.filter(task => task.recognitionStatus === 'ready' && task.usageStatus === 'available' &&
+  review: visibleTasks.value.filter(task => task.recognitionStatus === 'ready' && task.usageStatus === 'available' &&
     !task.readyForAutofill).length,
-  failed: tasks.value.filter(task => task.recognitionStatus === 'failed').length,
-  paused: tasks.value.filter(task => task.recognitionStatus === 'paused').length,
-  filled: tasks.value.filter(task => task.usageStatus === 'filled').length
+  failed: visibleTasks.value.filter(task => task.recognitionStatus === 'failed').length,
+  paused: visibleTasks.value.filter(task => task.recognitionStatus === 'paused').length,
+  filled: visibleTasks.value.filter(task => task.usageStatus === 'filled').length
 }))
 const canFill = computed(() => {
   const task = selectedTask.value
-  if (!task || !pageReady.value || filling.value || busy.value[task.taskId] || loadingDetail.value ||
+  if (!task || task.businessId !== businessId.value || !pageReady.value || filling.value || busy.value[task.taskId] || loadingDetail.value ||
     task.recognitionStatus !== 'ready' || !task.readyForAutofill || !extraction.value?.readyForAutofill) return false
   if (boundTask.value && boundTask.value.taskId !== task.taskId) return false
   if (task.boundPageId && task.boundPageId !== pageId.value) return false
@@ -79,30 +86,40 @@ const fillLabel = computed(() => selectedTask.value?.usageStatus === 'filled' ? 
 const fillHint = computed(() => {
   const task = selectedTask.value
   if (!task) return ''
-  if (!pageReady.value) return '请进入采购订单的新建页面，再使用这张票据。'
-  if (boundTask.value && boundTask.value.taskId !== task.taskId) return '当前单据已使用另一张票据。请在 ERP 中新建采购订单后处理这张。'
+  if (!pageReady.value) return `请进入${businessName.value}的新建页面，再使用这张票据。`
+  if (boundTask.value && boundTask.value.taskId !== task.taskId) return `当前单据已使用另一张票据。请在 ERP 中新建${businessName.value}后处理这张。`
   if (task.boundPageId && task.boundPageId !== pageId.value) return '这张票据正在另一张单据中使用，请回到对应单据继续。'
   if (task.usageStatus === 'uncertain') return task.boundPageId === pageId.value
     ? '上次代填状态未确认，请核对当前单据后重试代填，无需重新识别。'
-    : '上次代填未确认完成，请先核对 ERP 中是否已有这张订单。'
+    : '上次代填未确认完成，请先核对 ERP 中是否已有这张单据。'
   if (!task.boundPageId && ['filled', 'partial'].includes(task.usageStatus)) return '这是已使用的票据。核对 ERP 后，可重新放入待处理列表。'
   if (task.recognitionStatus === 'ready' && !task.readyForAutofill) return '识别结果不完整，暂不可代填。请查看原图及缺失信息，重试识别或更换清晰图片。'
-  if (task.usageStatus === 'filled') return '已代填，请在 ERP 中核对并手动保存。处理下一张前，请先新建采购订单。'
+  if (task.usageStatus === 'filled') return `已代填，请在 ERP 中核对并手动保存。处理下一张前，请先新建${businessName.value}。`
   if (task.usageStatus === 'partial') return '部分字段尚未填入，请核对 ERP 提示后重试代填，无需再次识别。'
   return '核对结果后确认代填；其余图片会继续在后台识别。'
 })
 const headerFields = computed(() => {
-  const header = extraction.value?.header
-  if (!header) return []
-  const fields: [string, unknown][] = [
-    ['供应商', header.supplierName], ['来源单号', header.sourceOrderNumber],
-    ['票据日期', header.invoiceDate], ['启运日期', header.departureDate],
-    ['客户名称', header.customerName], ['收货地址', header.receivingAddress],
-    ['承运单位', header.carrierName], ['承运方式', header.transportMethod],
-    ['冷链方式', header.coldChain], ['运输时限', header.transportTimeLimit],
-    ['收货备注', header.receiptRemark], ['付款方式', header.paymentMethod],
-    ['组别', header.groupName], ['备注', header.remark]
-  ]
+  const data = extraction.value
+  if (!data) return []
+  let fields: [string, unknown][]
+  if (data.documentType === 'goods-receipt') {
+    const h = data.header
+    fields = [
+      ['供应商', h.supplierName], ['启运日期', h.departureDate], ['承运单位', h.carrierName],
+      ['承运方式', h.transportMethod], ['收货日期', h.receiptDateTime], ['外表温度', h.surfaceTemperature],
+      ['运输工具', h.transportVehicle], ['启运地点', h.departurePlace], ['启运时间', h.departureDateTime],
+      ['到货时间', h.receiptDateTimeDetail], ['实际运输时长', h.actualTransportHours], ['收货备注', h.receiptRemark]
+    ]
+  } else {
+    const h = data.header
+    fields = [
+      ['供应商', h.supplierName], ['来源单号', h.sourceOrderNumber], ['票据日期', h.invoiceDate],
+      ['启运日期', h.departureDate], ['客户名称', h.customerName], ['收货地址', h.receivingAddress],
+      ['承运单位', h.carrierName], ['承运方式', h.transportMethod], ['冷链方式', h.coldChain],
+      ['运输时限', h.transportTimeLimit], ['收货备注', h.receiptRemark], ['付款方式', h.paymentMethod],
+      ['组别', h.groupName], ['备注', h.remark]
+    ]
+  }
   return fields.map(([label, value]) => ({ label, value: value === null || value === '' ? '未识别' : String(value) }))
 })
 
@@ -136,14 +153,14 @@ function selectTask(taskId: string | null, remember = true): void {
 }
 
 function reconcileSelection(pageChanged = false): void {
-  if (pageChanged && isPurchasePage.value) {
+  if (pageChanged) {
     const remembered = pageId.value ? selectedByPage.get(pageId.value) : undefined
-    const existing = tasks.value.find(task => task.taskId === remembered)
+    const existing = visibleTasks.value.find(task => task.taskId === remembered)
     selectTask(boundTask.value?.taskId ?? existing?.taskId ?? null, false)
   }
   if (selectedId.value && !selectedTask.value) selectTask(null, false)
-  if (!selectedId.value && isPurchasePage.value) {
-    const candidate = boundTask.value ?? tasks.value.find(task => task.recognitionStatus === 'ready' && task.readyForAutofill &&
+  if (!selectedId.value && isQueuePage.value) {
+    const candidate = boundTask.value ?? visibleTasks.value.find(task => task.recognitionStatus === 'ready' && task.readyForAutofill &&
       task.usageStatus === 'available' && !task.boundPageId)
     if (candidate) selectTask(candidate.taskId)
   }
@@ -198,15 +215,20 @@ async function refreshLoop(): Promise<void> {
   }
 }
 
-async function addImages(): Promise<void> {
-  if (!accountId.value || !signedIn.value || importing.value || filling.value) return
+async function addImages(dropToken?: string): Promise<void> {
+  if (!accountId.value || !signedIn.value || importing.value || filling.value || previewOwned) {
+    if (dropToken) throw new Error('当前正在导入、代填或查看原图，请处理完成后重新拖入')
+    return
+  }
   importing.value = true
   const epoch = accountEpoch
   error.value = ''
   notice.value = ''
   importErrors.value = []
   try {
-    const result = await api.add()
+    const targetBusiness = businessId.value
+    if (!targetBusiness) return
+    const result = dropToken ? await api.addDropped(targetBusiness, dropToken) : await api.add(targetBusiness)
     if (disposed || epoch !== accountEpoch) return
     importErrors.value = result.errors
     if (result.added.length) notice.value = `已加入 ${result.added.length} 张图片，正在后台识别。每张完成后即可使用。`
@@ -217,6 +239,8 @@ async function addImages(): Promise<void> {
     requestRefresh()
   }
 }
+
+defineExpose({ importDropped: (token: string) => addImages(token) })
 
 function canRetry(task: PurchaseQueueTask): boolean {
   return !task.boundPageId && task.usageStatus === 'available' &&
@@ -401,36 +425,36 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section v-if="isPurchasePage || tasks.length" class="purchase-queue" data-testid="purchase-queue">
+  <section v-if="isQueuePage || tasks.length" class="purchase-queue" data-testid="purchase-queue">
     <header class="purchase-queue-heading">
-      <div><h3>{{ isPurchasePage ? '采购票据队列' : '采购票据 · 后台识别' }}</h3><p>每张图片独立识别，完成一张即可使用。</p></div>
+      <div><h3>{{ businessName }}票据队列</h3><p>每个文件独立识别，完成一张即可使用。</p></div>
       <span v-if="counts.running" class="purchase-running-badge">{{ counts.running }} 张识别中</span>
     </header>
-    <p v-if="!accountId" class="purchase-hint">请从账号管理打开已保存的采购员账号后，使用批量识别。手动登录窗口无法确认票据归属。</p>
+    <p v-if="!accountId" class="purchase-hint">请从账号管理打开已保存的账号后，使用批量识别。手动登录窗口无法确认票据归属。</p>
     <template v-else>
       <p v-if="!signedIn" class="purchase-hint">账号尚未登录就绪，票据已保留。登录完成后可继续处理。</p>
-      <button v-if="isPurchasePage" type="button" class="primary-button purchase-add" data-testid="purchase-add"
-        :disabled="!signedIn || importing || filling" @click="addImages">
-        {{ importing ? '正在加入图片…' : tasks.length ? '继续添加图片' : '批量选择图片并识别' }}
+      <button v-if="isQueuePage" type="button" class="primary-button purchase-add" data-testid="purchase-add"
+        :disabled="!signedIn || importing || filling" @click="addImages()">
+        {{ importing ? '正在加入图片…' : visibleTasks.length ? '继续添加图片' : '批量选择图片并识别' }}
       </button>
-      <p v-if="isPurchasePage" class="purchase-hint">选择完成即开始识别，无需再次筛选。结果保存在本机，可在后续新建采购订单时使用。</p>
-      <p v-if="notice && isPurchasePage" class="purchase-notice" role="status">{{ notice }}</p>
+      <p v-if="isQueuePage" class="purchase-hint">也可将多张图片或 PDF 拖入软件界面，直接开始识别，无需再次筛选。结果保存在本机，可在后续新建{{ businessName }}时使用。</p>
+      <p v-if="notice && isQueuePage" class="purchase-notice" role="status">{{ notice }}</p>
       <p v-if="error" class="purchase-error" role="alert">{{ error }}</p>
-      <ul v-if="importErrors.length && isPurchasePage" class="purchase-import-errors" aria-label="未加入的图片">
+      <ul v-if="importErrors.length && isQueuePage" class="purchase-import-errors" aria-label="未加入的图片">
         <li v-for="(failure, index) in importErrors" :key="index"><strong>{{ failure.fileName }}</strong>：{{ failure.message }}</li>
       </ul>
-      <div v-if="tasks.length" class="purchase-counts" aria-live="polite" aria-atomic="true">
+      <div v-if="visibleTasks.length" class="purchase-counts" aria-live="polite" aria-atomic="true">
         <span>共 {{ counts.total }} 张</span><span>排队 {{ counts.waiting }}</span><span>可代填 {{ counts.ready }}</span>
         <span v-if="counts.review">待补全 {{ counts.review }}</span><span v-if="counts.paused">已暂停 {{ counts.paused }}</span>
         <span v-if="counts.failed">失败 {{ counts.failed }}</span><span v-if="counts.filled">已代填 {{ counts.filled }}</span>
       </div>
-      <ol v-if="tasks.length" class="purchase-task-list" aria-label="采购票据处理队列">
-        <li v-for="(task, index) in tasks" :key="task.taskId" :data-selected="selectedId === task.taskId">
+      <ol v-if="visibleTasks.length" class="purchase-task-list" :aria-label="`${businessName}票据处理队列`">
+        <li v-for="(task, index) in visibleTasks" :key="task.taskId" :data-selected="selectedId === task.taskId">
           <button type="button" class="purchase-task-select" data-testid="purchase-task" :data-task-id="task.taskId"
             :data-recognition-status="task.recognitionStatus" :data-usage-status="task.usageStatus"
             :aria-pressed="selectedId === task.taskId" @click="selectTask(task.taskId)">
             <span class="purchase-task-number">{{ index + 1 }}</span>
-            <span class="purchase-task-content"><strong :title="task.fileName">{{ task.fileName }}</strong>
+            <span class="purchase-task-content"><strong :title="task.fileName">{{ task.fileName }}</strong><small v-if="!isQueuePage">{{ BUSINESS_DEFINITIONS[task.businessId].name }}</small>
               <small>{{ task.supplierName || '供应商待识别' }}<template v-if="task.sourceOrderNumber"> · {{ task.sourceOrderNumber }}</template></small>
               <span class="purchase-task-state" :data-status="task.usageStatus === 'available' ? task.recognitionStatus : task.usageStatus">{{ statusLabel(task) }}</span>
               <small v-if="task.boundPageId">{{ task.boundPageId === pageId ? '当前单据正在使用' : '其他单据正在使用' }}</small>
@@ -448,9 +472,9 @@ onBeforeUnmount(() => {
           </div>
         </li>
       </ol>
-      <p v-else-if="isPurchasePage" class="purchase-empty">一次选择多张票据图片，识别期间可以继续在 ERP 中工作。</p>
+      <p v-else-if="isQueuePage" class="purchase-empty">一次选择多张票据图片，识别期间可以继续在 ERP 中工作。</p>
 
-      <section v-if="selectedTask && isPurchasePage" class="purchase-detail" data-testid="purchase-detail" :data-task-id="selectedTask.taskId">
+      <section v-if="selectedTask && isQueuePage" class="purchase-detail" data-testid="purchase-detail" :data-task-id="selectedTask.taskId">
         <div class="purchase-detail-heading"><h3 :title="selectedTask.fileName">{{ selectedTask.fileName }}</h3>
           <button ref="previewButton" type="button" class="secondary-button" data-testid="purchase-preview"
             :disabled="!signedIn || previewBusy || filling || Boolean(busy[selectedTask.taskId])" @click="showOriginal">{{ previewBusy ? '正在打开…' : '查看原图' }}</button>
@@ -460,6 +484,7 @@ onBeforeUnmount(() => {
         <p v-if="selectedTask.message && selectedTask.recognitionStatus !== 'recognizing'" class="purchase-hint">{{ selectedTask.message }}</p>
         <p v-if="loadingDetail && !extraction" class="purchase-hint" role="status">正在读取本地识别结果…</p>
         <template v-if="extraction && detail?.result">
+          <p v-if="extraction.documentType === 'goods-receipt'" class="purchase-hint">货账相符、随货单合规等验收结论仍需在 ERP 中人工确认。</p>
           <div class="purchase-metrics"><span>商品 <strong>{{ extraction.items.length }}</strong> 项</span><span>字段覆盖 <strong>{{ detail.result.coveragePercent }}%</strong></span></div>
           <dl class="purchase-fields"><div v-for="field in headerFields" :key="field.label"><dt>{{ field.label }}</dt><dd>{{ field.value }}</dd></div></dl>
           <details v-if="extraction.reviewRequired.length || extraction.missingRecommendedFields.length || detail.result.warnings.length" class="issues-card" :open="!extraction.readyForAutofill">
@@ -471,10 +496,11 @@ onBeforeUnmount(() => {
           <details class="purchase-items" open><summary>商品明细（{{ extraction.items.length }}）</summary>
             <article v-for="(item, index) in extraction.items" :key="index">
               <h4>{{ index + 1 }}. {{ item.productName }}</h4><p>{{ item.specification || '规格未识别' }} · {{ item.manufacturer || '生产企业未识别' }}</p>
-              <p>数量 {{ item.quantity ?? '—' }} {{ item.unit || '' }} · 含税单价 {{ item.taxIncludedUnitPrice ?? '—' }} · 金额 {{ item.taxIncludedAmount ?? '—' }}</p>
+              <p v-if="'quantity' in item">数量 {{ item.quantity ?? '—' }} {{ item.unit || '' }} · 含税单价 {{ item.taxIncludedUnitPrice ?? '—' }} · 金额 {{ item.taxIncludedAmount ?? '—' }}</p>
+              <p v-else>到货数量 {{ item.arrivalQuantity ?? '—' }} · 实收数量 {{ item.receiptQuantity ?? '—' }} {{ item.unit || '' }} · 单价 {{ item.unitPrice ?? '—' }} · 金额 {{ item.amount ?? '—' }}</p>
               <p>批号 {{ item.batchNumber || '—' }} · 生产日期 {{ item.productionDate || '—' }} · 有效期 {{ item.expiryDate || '—' }}</p>
               <p>批准文号 {{ item.approvalNumber || '—' }}</p>
-              <p v-if="item.dosageForm || item.origin || item.qualityStatus">{{ item.dosageForm || '' }}<template v-if="item.origin"> · 产地 {{ item.origin }}</template><template v-if="item.qualityStatus"> · {{ item.qualityStatus }}</template></p>
+              <p v-if="'origin' in item && (item.dosageForm || item.origin || item.qualityStatus)">{{ item.dosageForm || '' }}<template v-if="item.origin"> · 产地 {{ item.origin }}</template><template v-if="item.qualityStatus"> · {{ item.qualityStatus }}</template></p>
               <p v-if="item.marketingAuthorizationHolder">上市许可持有人 {{ item.marketingAuthorizationHolder }}</p>
             </article>
           </details>
@@ -501,8 +527,8 @@ onBeforeUnmount(() => {
           <button v-if="nextTask" type="button" class="secondary-button" data-testid="purchase-next" :disabled="!pageReady || Boolean(boundTask) || filling" @click="useNext">使用下一张已识别票据</button>
         </div>
       </section>
-      <p v-else-if="isPurchasePage && tasks.length" class="purchase-hint">可以代填的结果会自动展示；也可点击队列中的票据查看进度，复核待补全的信息。</p>
-      <p v-else-if="tasks.length" class="purchase-hint">后台识别继续进行。进入采购订单新建页后，即可使用已完成结果。</p>
+      <p v-else-if="isQueuePage && visibleTasks.length" class="purchase-hint">可以代填的结果会自动展示；也可点击队列中的票据查看进度，复核待补全的信息。</p>
+      <p v-else-if="tasks.length" class="purchase-hint">后台识别继续进行。进入对应的采购订单或商品收货登记新建页后，即可使用已完成结果。</p>
     </template>
 
     <Teleport to="body">

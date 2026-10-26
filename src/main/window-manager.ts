@@ -46,6 +46,14 @@ export class WindowManager {
     return context
   }
 
+  fromFileDropEvent(event: Electron.IpcMainEvent): WorkWindow {
+    const context = [...this.windows.values()].find(window => !window.lifetime.signal.aborted &&
+      ((event.sender === window.mainWindow.webContents && event.senderFrame === event.sender.mainFrame) ||
+        window.erpController.acceptsFileDrop(event)))
+    if (!context) throw new Error('拒绝来自非业务窗口的文件拖入')
+    return context
+  }
+
   private assertShell(event: IpcMainInvokeEvent, managerOnly = false): void {
     const isManager = this.manager && event.sender === this.manager.webContents
     if ((!isManager && (managerOnly || !this.windows.has(event.sender.id))) || event.senderFrame !== event.sender.mainFrame) {

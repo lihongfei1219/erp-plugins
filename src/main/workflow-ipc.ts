@@ -9,6 +9,7 @@ import type { DocumentExtractionClient } from './document-extraction-client'
 import { OCR_IPC, type OcrCancelRequest, type OcrDocumentSelectionRequest, type OcrExtractionRequest } from '../shared/ocr'
 import { createLocalDocumentPreview } from './agent/document-images'
 import { normalizeExcludedPages } from './page-selection'
+import { registerFileDropIpc, takeDroppedFiles } from './file-drop'
 
 const LOCAL_PREVIEW_MAX_BYTES = 100 * 1024 * 1024
 const LOCAL_PREVIEW_MAX_PAGES = 50
@@ -49,6 +50,7 @@ function ensureCurrentBusiness(erpController: ErpViewController, businessId: Bus
 }
 
 export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentExtractionClient): void {
+  registerFileDropIpc(windows)
   ipcMain.handle(ERP_IPC.getState, (event) => {
     const { erpController } = windows.fromEvent(event)
     return erpController?.getState() ?? emptyErpState()
@@ -89,7 +91,7 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
     }
     try {
       const request = parseBusinessRequest(value)
-      if (request.businessId === 'purchase-order') throw new Error('采购订单请从票据队列选择结果代填')
+      if ((request.businessId === 'purchase-order' || request.businessId === 'goods-receipt')) throw new Error('采购订单和商品收货登记请从票据队列选择结果代填')
       ensureCurrentBusiness(erpController, request.businessId)
       return erpController.fillFixture(request.businessId)
     } catch (error) {
@@ -111,7 +113,7 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
       if (!isBusinessId(request.businessId) || typeof request.sessionId !== 'string') {
         throw new Error('代填会话无效')
       }
-      if (request.businessId === 'purchase-order') throw new Error('采购订单请从票据队列选择结果代填')
+      if ((request.businessId === 'purchase-order' || request.businessId === 'goods-receipt')) throw new Error('采购订单和商品收货登记请从票据队列选择结果代填')
       if (!erpController) throw new Error('ERP 视图尚未初始化')
       await erpController.refreshPageContext()
       const pageId = workflowSessions.getPageId(request.sessionId, request.businessId)
@@ -136,7 +138,7 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
       return { status: 'failed', message: '文件选择请求无效', preview: null }
     }
     const request = value as Partial<OcrDocumentSelectionRequest>
-    if (request.businessId === 'purchase-order') return { status: 'failed', message: '采购订单请使用批量票据队列', preview: null }
+    if ((request.businessId === 'purchase-order' || request.businessId === 'goods-receipt')) return { status: 'failed', message: '采购订单和商品收货登记请使用批量票据队列', preview: null }
     if (typeof request.sessionId !== 'string' || !isBusinessId(request.businessId) || typeof request.pageId !== 'string') {
       return { status: 'failed', message: '业务会话无效', preview: null }
     }
@@ -156,7 +158,17 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
       return { status: 'failed', message: '客户端窗口尚未初始化', preview: null }
     }
 
-    const selection = await dialog.showOpenDialog(mainWindow, {
+    let droppedPaths: string[] | undefined
+    if (request.dropToken !== undefined) {
+      try {
+        droppedPaths = takeDroppedFiles(windows.fromEvent(event), request.dropToken, request.businessId)
+        if (droppedPaths.length !== 1) throw new Error('单位首营每次只支持导入一个文件')
+      } catch (error) {
+        workflowSessions.discard(request.sessionId)
+        return { status: 'failed', message: error instanceof Error ? error.message : '拖入文件失败', preview: null }
+      }
+    }
+    const selection = droppedPaths ? { canceled: false, filePaths: droppedPaths } : await dialog.showOpenDialog(mainWindow, {
       title: '选择需要识别的票据',
       properties: ['openFile'],
       filters: [
@@ -245,7 +257,7 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
     }
 
     const candidate = request as Partial<OcrExtractionRequest>
-    if (candidate.businessId === 'purchase-order') return { status: 'failed', message: '采购订单请使用批量票据队列', result: null }
+    if ((candidate.businessId === 'purchase-order' || candidate.businessId === 'goods-receipt')) return { status: 'failed', message: '采购订单和商品收货登记请使用批量票据队列', result: null }
     if (
       typeof candidate.sessionId !== 'string' ||
       !isBusinessId(candidate.businessId) ||

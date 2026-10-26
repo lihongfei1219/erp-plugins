@@ -10,10 +10,16 @@ import { WindowManager } from '../src/main/window-manager'
 import { PurchaseQueueManager } from '../src/main/purchase-queue'
 import { registerPurchaseQueueIpc } from '../src/main/purchase-queue-ipc'
 import { registerWorkflowIpc } from '../src/main/workflow-ipc'
+import { normalizeGoodsReceiptSubmission } from '../src/main/businesses/goods-receipt-tool'
 import { normalizePurchaseOrderSubmission } from '../src/main/businesses/purchase-order-tool'
 import type { DocumentExtractionClient } from '../src/main/document-extraction-client'
 import type { OcrDocumentResult } from '../src/shared/ocr'
 import type { PurchaseQueueTask } from '../src/shared/purchase-queue'
+
+const dropping = process.argv.includes('file-drop') || process.argv.includes('file-drop-purchase')
+const goods = process.argv.includes('goods-queue') || process.argv.includes('file-drop')
+const businessId = goods ? 'goods-receipt' : 'purchase-order'
+const reportName = dropping ? goods ? 'file-drop' : 'file-drop-purchase' : goods ? 'goods-queue' : 'purchase-queue'
 
 mkdirSync(resolve('tmp'), { recursive: true })
 const directory = mkdtempSync(resolve('tmp/purchase-queue-electron-'))
@@ -26,7 +32,7 @@ const deadline = setTimeout(() => finish(new Error('Purchase queue Electron regr
 function finish(error?: unknown): void {
   clearTimeout(deadline)
   const report = { passed: !error, checks, error: error instanceof Error ? error.stack : error ? String(error) : null }
-  writeFileSync(resolve('tmp/purchase-queue-electron-result.json'), JSON.stringify(report, null, 2))
+  writeFileSync(resolve(`tmp/${reportName}-electron-result.json`), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report))
   app.exit(error ? 1 : 0)
 }
@@ -57,18 +63,24 @@ function resultFor(name: 'A' | 'B'): OcrDocumentResult {
     }],
     evidence: [], reviewRequired: []
   }, 1)
-  return { businessId: 'purchase-order', fileName: `${name}.png`, pageCount: 1, blockCount: 0,
+  const data = goods ? normalizeGoodsReceiptSubmission({
+    header: { supplierName: `合成供应商 ${name}`, departureDate: '2026-10-22', receiptRemark: '合成收货备注' },
+    items: [{ productName: `合成商品 ${name}`, specification: '10片', manufacturer: '合成厂家', unit: '盒',
+      arrivalQuantity: name === 'A' ? 2 : 3, receiptQuantity: name === 'A' ? 2 : 3, unitPrice: 5,
+      batchNumber: 'SYNTHETIC', sourcePages: [1] }], evidence: [], reviewRequired: []
+  }, 1) : extraction
+  return { businessId, fileName: `${name}.png`, pageCount: 1, blockCount: 0,
     ocrPages: 1, engine: 'synthetic-offline', modelVersion: 'test', elapsedMs: 1, coveragePercent: 100,
-    warnings: [], pages: [], extractedData: extraction }
+    warnings: [], pages: [], extractedData: data }
 }
 
-const editorHtml = `<input id="Ename" value="CGDD"><input id="Cname" value="采购订单"><input id="Mode" value="Add">
-  ${['DWMC', 'DWBH', 'QYRQ', 'FKFS', 'BZ', 'CYDW', 'CYFS', 'LCSP', 'YSSX', 'SHBZ', 'FZ'].map(id => `<input id="${id}">`).join('')}
+const editorHtml = `<input id="Ename" value="${goods ? 'SPSHDJ' : 'CGDD'}"><input id="Cname" value="${goods ? '商品收货登记' : '采购订单'}"><input id="Mode" value="Add">
+  ${['DWMC', 'DWBH', 'QYRQ', 'FKFS', 'BZ', 'CYDW', 'CYFS', 'LCSP', 'YSSX', 'SHBZ', 'FZ', 'SHDJBZ'].map(id => `<input id="${id}">`).join('')}
   <script>
     const rows = [];
     window.gridEditBody = { getRows: () => rows };
     window.gridhandler = () => {
-      const cells = Object.fromEntries('SPMC SPBH GG SCCS SL DJ JE'.split(' ').map(key => [key, {
+      const cells = Object.fromEntries('SPMC SPBH GG SCCS SL DJ JE DW DHSL SHSL JSSL SPPH SCRQ YXQZ SPM JX BZ'.split(' ').map(key => [key, {
         value: '', getValue() { return this.value }, setValue(value) {
           this.value = value;
           if (key === 'SL' || key === 'DJ') cells.JE.value = Number(cells.SL.value || 0) * Number(cells.DJ.value || 0);
@@ -101,6 +113,8 @@ async function run(): Promise<void> {
       response.end('<form method="post" action="/Login.aspx"><input id="tbUser" name="user"><input id="tbPassword" name="password" type="password"><input id="btnLogin" type="submit" value="登录"></form>')
       return
     }
+    if (request.url === '/purchase') { response.end(editorHtml.replace('SPSHDJ', 'CGDD').replace('商品收货登记', '采购订单')); return }
+    if (request.url === '/unit') { response.end('<input id="Ename" value="DWSYSP"><input id="Cname" value="单位首营审批"><input id="Mode" value="Add"><input id="DWMC"><input id="YYZZH">'); return }
     if (request.url?.startsWith('/editor')) { response.end(editorHtml); return }
     if (request.url === '/Login.aspx') {
       response.writeHead(302, { Location: '/Default.aspx' }); response.end(); return
@@ -139,7 +153,7 @@ async function run(): Promise<void> {
   const secondGate = new Promise<void>(resolve => { releaseSecond = resolve })
   const extractor: DocumentExtractionClient = {
     extractDocument: async (filePath, progress, options) => {
-      assert.equal(options.businessId, 'purchase-order')
+      assert.equal(options.businessId, businessId)
       assert.deepEqual(options.excludedPages ?? [], [])
       const name = readFileSync(filePath).equals(firstImage) ? 'A' : 'B'
       recognitions.push(name)
@@ -178,6 +192,15 @@ async function run(): Promise<void> {
     await until(() => enabled(testId), `${testId} enabled`)
     await script(`document.querySelector('[data-testid="${testId}"]').click()`)
   }
+  const dropFiles = async (target: Electron.WebContents, paths: string[], x: number, y: number): Promise<void> => {
+    target.debugger.attach('1.3')
+    try {
+      const data = { items: [], files: paths, dragOperationsMask: 1 }
+      for (const type of ['dragEnter', 'dragOver', 'drop']) {
+        await target.debugger.sendCommand('Input.dispatchDragEvent', { type, x, y, data })
+      }
+    } finally { target.debugger.detach() }
+  }
   const capture = async (fileName: string): Promise<void> => {
     // A hidden window may have an older compositor frame even after DOM assertions pass.
     // Temporarily make the *page capturer* active to request a fresh frame; the
@@ -198,14 +221,20 @@ async function run(): Promise<void> {
     await until(() => enabled('purchase-add'), 'actual purchase queue renderer mounted')
     await until(() => context.erpController.getState().openPageIds.length === 2, 'two distinct new purchase pages detected')
     const originalPage = context.erpController.getState().currentPage!.pageId!
-    const legacySelection = await script<{ status: string; preview: unknown }>(`window.desktop.ocr.selectDocument(${JSON.stringify({ sessionId: 'legacy-purchase', businessId: 'purchase-order', pageId: originalPage })})`)
+    const legacySelection = await script<{ status: string; preview: unknown }>(`window.desktop.ocr.selectDocument(${JSON.stringify({ sessionId: 'legacy-purchase', businessId, pageId: originalPage })})`)
     assert.equal(legacySelection.status, 'failed')
     assert.equal(legacySelection.preview, null)
     assert.equal(Boolean(selectionOptions), false)
-    await click('purchase-add')
+    if (dropping) {
+      await script('window.dropEvents = []; window.desktop.files.onDrop(value => window.dropEvents.push(value)); void 0')
+      await dropFiles(window.webContents, imagePaths, 1100, 300)
+    } else await click('purchase-add')
     await until(async () => (await list()).length === 2, 'two images imported through actual IPC')
-    assert.ok(selectionOptions?.properties?.includes('multiSelections'))
-    assert.ok(selectionOptions?.properties?.includes('openFile'))
+    if (dropping) assert.equal(selectionOptions, undefined, 'dropping must not open the file picker')
+    else {
+      assert.ok(selectionOptions?.properties?.includes('multiSelections'))
+      assert.ok(selectionOptions?.properties?.includes('openFile'))
+    }
     assert.equal(await script(`Boolean(document.querySelector('.preview-dialog'))`), false)
     await until(async () => (await list()).some(task => task.fileName === 'A.png' && task.recognitionStatus === 'ready'), 'first image ready without starting the old preview flow')
     const initialTasks = await list()
@@ -216,11 +245,17 @@ async function run(): Promise<void> {
     await click('purchase-fill')
     await until(async () => (await list()).find(task => task.taskId === first.taskId)?.usageStatus === 'filled', 'first task filled before second OCR completes')
     assert.equal(await erp.executeJavaScript(`document.getElementById('a').contentDocument.getElementById('DWMC').value`), '合成供应商 A')
-    assert.equal(await erp.executeJavaScript(`document.getElementById('a').contentWindow.gridEditBody.getRows()[0].cells().SL.getValue()`), '2')
+    assert.equal(await erp.executeJavaScript(`document.getElementById('a').contentWindow.gridEditBody.getRows()[0].cells().${goods ? 'SHSL' : 'SL'}.getValue()`), '2')
     assert.notEqual((await list()).find(task => task.taskId === second.taskId)?.recognitionStatus, 'ready')
     checks.push('Actual dialog IPC allows multiple images, bypasses page filtering and fills A while B is still recognizing')
+    if (dropping) {
+      const token = await script<string>('window.dropEvents.find(value => value.kind === "ready").token')
+      await assert.rejects(script(`window.desktop.purchaseQueue.addDropped('${businessId}', ${JSON.stringify(token)})`), /失效/)
+      await assert.rejects(otherWindow.webContents.executeJavaScript(`window.desktop.purchaseQueue.addDropped('${businessId}', ${JSON.stringify(token)})`), /失效/)
+      checks.push('Trusted OS-style sidebar drop imports both files without a picker; tokens cannot be replayed or used by another account')
+    }
 
-    const legacyFill = await script<{ status: string }>(`window.desktop.erp.fillSession(${JSON.stringify({ sessionId: `purchase-queue:${first.taskId}:${originalPage}`, businessId: 'purchase-order' })})`)
+    const legacyFill = await script<{ status: string }>(`window.desktop.erp.fillSession(${JSON.stringify({ sessionId: `purchase-queue:${first.taskId}:${originalPage}`, businessId })})`)
     assert.equal(legacyFill.status, 'failed')
     assert.equal(await erp.executeJavaScript(`document.getElementById('a').contentWindow.gridEditBody.getRows().length`), 1)
     checks.push('Legacy purchase selectDocument and fillSession endpoints cannot bypass the queue')
@@ -230,7 +265,7 @@ async function run(): Promise<void> {
     await until(() => script<boolean>(`document.querySelector('[data-testid="purchase-task"][data-task-id="${second.taskId}"]')?.getAttribute('data-recognition-status') === 'ready'`), 'renderer received second completion')
     assert.equal(await selected(), first.taskId)
     assert.equal(await erp.executeJavaScript(`document.getElementById('a').contentDocument.getElementById('DWMC').value`), '合成供应商 A')
-    await capture('purchase-queue-ui.png')
+    await capture(`${reportName}-ui.png`)
     checks.push('A remains selected and its ERP fields stay untouched when B completes in the background')
 
     const recognitionCount = recognitions.length
@@ -246,7 +281,7 @@ async function run(): Promise<void> {
     assert.equal(erpView.getVisible(), false)
     assert.equal(await script(`document.querySelectorAll('[data-testid="purchase-preview-dialog"] input[type="checkbox"]').length`), 0)
     assert.equal(await script(`Array.from(document.querySelectorAll('[data-testid="purchase-preview-dialog"] button')).some(button => /识别|排除|上传/.test(button.textContent || ''))`), false)
-    await capture('purchase-queue-preview.png')
+    await capture(`${reportName}-preview.png`)
     await click('purchase-preview-close')
     await until(() => erpView.getVisible(), 'closing original preview restores native ERP view')
     assert.equal(await selected(), first.taskId)
@@ -277,6 +312,42 @@ async function run(): Promise<void> {
     assert.equal(recognitions.length, recognitionCount)
     checks.push('Opening a different new purchase page recommends B and fills its cached result without OCR')
 
+    if (goods) {
+      // A cached purchase result must never appear in or be consumed by a receipt page.
+      const purchaseResult = resultFor('A')
+      purchaseResult.businessId = 'purchase-order'
+      purchaseResult.extractedData = normalizePurchaseOrderSubmission({
+        header: { supplierName: '合成采购供应商' },
+        items: [{ productName: '合成采购商品', quantity: 1, taxIncludedUnitPrice: 5, sourcePages: [1] }], evidence: [], reviewRequired: []
+      }, 1)
+      const originalExtract = extractor.extractDocument
+      extractor.extractDocument = async () => ({ status: 'completed', message: '', result: purchaseResult })
+      const purchase = (await queue.enqueue(context.purchaseQueueOwner!, [imagePaths[0]], 'purchase-order')).added[0]
+      await until(() => queue.get(context.purchaseQueueOwner!, purchase).recognitionStatus === 'ready', 'mixed purchase task ready')
+      assert.equal(queue.get(context.purchaseQueueOwner!, purchase).readyForAutofill, true)
+      extractor.extractDocument = originalExtract
+      await until(async () => (await list()).length === 3, 'mixed snapshot received')
+      assert.equal(await script(`document.querySelectorAll('[data-testid="purchase-task"]').length`), 2)
+      const wrongBusiness = await script<{ status: string; message: string }>(`window.desktop.purchaseQueue.fill(${JSON.stringify({ taskId: purchase, pageId: secondPage })})`)
+      assert.equal(wrongBusiness.status, 'failed')
+      assert.match(wrongBusiness.message, /业务不一致/)
+      assert.equal(queue.get(context.purchaseQueueOwner!, purchase).usageStatus, 'available')
+      assert.equal(queue.get(context.purchaseQueueOwner!, purchase).boundPageId, null)
+      const beforeSwitch = await selected()
+      await erp.executeJavaScript(`(() => {
+        const frame = document.createElement('iframe'); frame.id = 'purchase'; frame.src = '/purchase';
+        frame.style = 'width:800px;height:600px'; document.getElementById('b').style.display = 'none'; document.body.appendChild(frame);
+      })()`)
+      await until(() => context.erpController.getState().currentPage?.businessId === 'purchase-order', 'purchase editor active')
+      await until(async () => await selected() === purchase, 'purchase page recommends only purchase task')
+      assert.equal(await script(`document.querySelectorAll('[data-testid="purchase-task"]').length`), 1)
+      await erp.executeJavaScript(`document.getElementById('purchase').remove(); document.getElementById('b').style.display = 'block'`)
+      await until(async () => await selected() === beforeSwitch, 'receipt selection restored after business switch')
+      queue.remove(context.purchaseQueueOwner!, purchase)
+      checks.push('Mixed purchase and receipt queues filter by business; forged cross-business fill cannot claim or alter a task; switching restores the receipt selection')
+    }
+
+
     assert.deepEqual(await otherWindow.webContents.executeJavaScript('window.desktop.purchaseQueue.list()'), [])
     await assert.rejects(otherWindow.webContents.executeJavaScript(`window.desktop.purchaseQueue.get(${JSON.stringify(first.taskId)})`))
     const otherState = await otherWindow.webContents.executeJavaScript('window.desktop.erp.getState()')
@@ -298,6 +369,54 @@ async function run(): Promise<void> {
     assert.ok(recoveredTasks.every(task => task.recognitionStatus === 'ready' && task.usageStatus === 'filled'))
     assert.equal(recognitions.length, recognitionCount)
     checks.push('Crashing the renderer while preview is open restores the ERP view; reloading recovers both cached tasks without OCR')
+    if (dropping) {
+      const countBeforeDrop = recognitions.length
+      const invalidPath = join(directory, 'unsupported.txt')
+      writeFileSync(invalidPath, 'synthetic unsupported file')
+      assert.equal(await erp.executeJavaScript('typeof window.desktop'), 'undefined')
+      await dropFiles(erp, [imagePaths[0], invalidPath, directory], 150, 150)
+      await until(async () => (await list()).length === 3, 'native ERP iframe drop imports the valid image')
+      await until(() => script<boolean>(`document.querySelector('.purchase-import-errors')?.textContent.includes('unsupported.txt') ?? false`), 'unsupported files reported individually')
+      assert.equal(recognitions.length, countBeforeDrop + 1)
+      assert.equal((await list()).filter(task => task.usageStatus === 'filled').length, 2)
+      assert.equal(erp.getURL(), `${url.origin}/Default.aspx`)
+      assert.equal(selectionOptions, undefined)
+      checks.push('Drop directly onto native ERP iframe reuses queue validation, imports valid files, reports invalid files/directories and never navigates or auto-fills')
+
+      // Hold a real drop notification to test authorization before its token is consumed.
+      const originalSend = context.send
+      let heldToken: string | undefined
+      context.send = (channel, value) => {
+        if (channel === 'files:feedback' && (value as { kind?: string })?.kind === 'ready') {
+          heldToken = (value as { token: string }).token
+        } else originalSend(channel, value)
+      }
+      await dropFiles(erp, [imagePaths[0]], 150, 150)
+      await until(() => Boolean(heldToken), 'drop token held before renderer consumption')
+      context.send = originalSend
+      await assert.rejects(otherWindow.webContents.executeJavaScript(`window.desktop.purchaseQueue.addDropped('${businessId}', ${JSON.stringify(heldToken)})`), /失效/)
+
+      await erp.executeJavaScript(`document.getElementById('b').contentDocument.getElementById('Mode').value = 'Edit'`)
+      await until(() => context.erpController.getState().currentPage?.isNew === false, 'non-new form detected')
+      await assert.rejects(script(`window.desktop.purchaseQueue.addDropped('${businessId}', ${JSON.stringify(heldToken)})`), /切换/)
+      await dropFiles(erp, [imagePaths[0]], 150, 150)
+      await until(() => script<boolean>(`document.querySelector('[data-testid="file-drop-error"]')?.textContent.includes('新建') ?? false`), 'wrong-page drop rejected')
+      assert.equal((await list()).length, 3)
+      checks.push('An unconsumed drop token remains private to its account and is rejected if the target form changes before import')
+
+      await erp.executeJavaScript(`document.getElementById('b').src = '/unit'`)
+      await until(() => context.erpController.getState().currentPage?.businessId === 'unit-initial-approval', 'unit editor active')
+      await dropFiles(erp, imagePaths, 150, 150)
+      await until(() => script<boolean>(`document.querySelector('[data-testid="file-drop-error"]')?.textContent.includes('每次请拖入一个') ?? false`), 'unit multi-file drop rejected without truncation')
+      await dropFiles(erp, [imagePaths[0]], 150, 150)
+      await until(() => script<boolean>(`Boolean(document.querySelector('.preview-dialog input[type="checkbox"]'))`), 'unit drop opens the original page filter')
+      assert.equal(erpView.getVisible(), false)
+      assert.equal(recognitions.length, countBeforeDrop + 1, 'unit drop must not automatically call OCR')
+      assert.equal(selectionOptions, undefined)
+      await script(`document.querySelector('button[aria-label="关闭页面筛选"]').click()`)
+      await until(() => erpView.getVisible(), 'closing unit filter restores ERP')
+      checks.push('Non-new forms reject drops; unit approval accepts one file into its original privacy filter and never auto-recognizes')
+    }
   } finally {
     releaseSecond()
     dialog.showOpenDialog = originalDialog
