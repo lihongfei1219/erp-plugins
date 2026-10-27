@@ -146,12 +146,22 @@ export class PurchaseQueueManager {
     root: string,
     private readonly client: DocumentExtractionClient,
     private readonly onChanged: (owner: string) => void,
-    options: { concurrency?: number; maxUploadBytes?: number } = {}
+    options: { concurrency?: number; maxUploadBytes?: number; discardPreviousWindows?: boolean } = {}
   ) {
     this.root = resolve(root)
     this.concurrency = Math.max(1, Math.min(8, Math.floor(options.concurrency ?? 2)))
     this.maxUploadBytes = options.maxUploadBytes ?? 100 * 1024 * 1024
     mkdirSync(this.root, { recursive: true })
+    if (options.discardPreviousWindows) {
+      if (lstatSync(this.root).isSymbolicLink()) throw new Error('票据缓存根目录不能是符号链接')
+      // Only remove our hashed queue directories, including old persistent
+      // account queues and remnants from a previous process crash.
+      for (const entry of readdirSync(this.root, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue
+        try { this.deleteDirectory(join(this.root, entry.name)) }
+        catch { /* A fresh window identity cannot restore locked remnants. Retry cleanup next startup. */ }
+      }
+    }
   }
 
   list(owner: string): PurchaseQueueTask[] {
@@ -196,6 +206,7 @@ export class PurchaseQueueManager {
         const metadata = await stat(filePath)
         if (!metadata.isFile() || metadata.size <= 0) throw new Error('文件为空或不是普通文件')
         if (metadata.size > this.maxUploadBytes) throw new Error(`文件超过 ${Math.round(this.maxUploadBytes / 1024 / 1024)} MB 限额`)
+        if (queue.removed || this.stopped) throw new Error('导入已停止')
         const taskId = randomUUID()
         directory = this.taskDirectory(owner, taskId)
         mkdirSync(directory, { recursive: true })
@@ -218,6 +229,9 @@ export class PurchaseQueueManager {
         this.pump()
       } catch (error) {
         if (directory) this.deleteDirectory(directory)
+        if (queue.removed) {
+          try { this.deleteDirectory(this.ownerDirectory(owner)) } catch { /* Startup retries locked cache cleanup. */ }
+        }
         imported.errors.push({ fileName: basename(filePath), message: message(error) })
       }
     }
@@ -363,8 +377,10 @@ export class PurchaseQueueManager {
     const queue = this.owners.get(owner)
     if (queue) { queue.active = false; queue.removed = true }
     for (const job of this.running.values()) if (job.owner === owner) { job.valid = false; job.controller.abort() }
-    this.deleteDirectory(this.ownerDirectory(owner))
     this.owners.delete(owner)
+    for (const key of this.fills.keys()) if (key.startsWith(`${owner}\0`)) this.fills.delete(key)
+    // Invalidation is effective even if Windows temporarily locks a source file.
+    this.deleteDirectory(this.ownerDirectory(owner))
     this.emit(owner)
   }
 
@@ -381,7 +397,7 @@ export class PurchaseQueueManager {
   private deleteDirectory(directory: string): void {
     const target = resolve(directory)
     if (!target.startsWith(this.root + sep) || target === this.root) throw new Error('拒绝清理缓存目录外的路径')
-    try { rmSync(target, { recursive: true, force: true }) }
+    try { rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }) }
     catch (error) { throw new Error(message(error)) }
   }
 

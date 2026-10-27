@@ -18,6 +18,37 @@ function goodsDocument(): OcrDocumentResult {
   }, 1) }
 }
 
+test('application startup discards old completed and interrupted window caches without restoring OCR', async t => {
+  const { manager, client, source, root, recordPath } = fixture(t)
+  const ids = (await manager.enqueue(OWNER, [source('completed.png'), source('interrupted.png')], 'goods-receipt')).added
+  client.complete(0, goodsDocument())
+  await eventually(() => manager.get(OWNER, ids[0]).recognitionStatus === 'ready')
+  manager.shutdown()
+  const unrelated = join(root, 'unrelated.txt')
+  writeFileSync(unrelated, 'leave unrelated files alone')
+  const restarted = new PurchaseQueueManager(root, client, () => {}, { discardPreviousWindows: true })
+  t.after(() => restarted.shutdown())
+  assert.deepEqual(restarted.list(OWNER), [])
+  restarted.activate(OWNER)
+  client.complete(1, goodsDocument())
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(restarted.list(OWNER), [])
+  assert.equal(client.calls.length, 2)
+  assert.equal(existsSync(dirname(dirname(recordPath(OWNER, ids[0])))), false)
+  assert.equal(readFileSync(unrelated, 'utf8'), 'leave unrelated files alone')
+})
+
+test('closing during file import cannot recreate the deleted window queue', async t => {
+  const { manager, client, source, root } = fixture(t)
+  const imported = manager.enqueue(OWNER, [source('closing-a.png'), source('closing-b.png')])
+  manager.removeOwner(OWNER)
+  const result = await imported
+  assert.deepEqual(result.added, [])
+  assert.equal(result.errors.length, 2)
+  assert.equal(client.calls.length, 0)
+  assert.equal(existsSync(join(root, createHash('sha256').update(OWNER).digest('hex'))), false)
+})
+
 test('goods receipts fill independently while later images run, persist and reuse without OCR', async t => {
   const { manager, client, source, root } = fixture(t)
   const { added } = await manager.enqueue(OWNER, [source('receipt-a.png'), source('receipt-b.png')], 'goods-receipt')

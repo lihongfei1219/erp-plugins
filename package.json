@@ -23,6 +23,7 @@
     "test:purchase-queue": "esbuild scripts/purchase-queue.test.ts --bundle --platform=node --format=esm --outfile=tmp/purchase-queue.test.mjs && node --test tmp/purchase-queue.test.mjs",
     "test:purchase-queue:electron": "node scripts/run-multi-account-test.mjs purchase-queue",
     "test:goods-queue:electron": "node scripts/run-multi-account-test.mjs goods-queue",
+    "test:queue-lifetime:electron": "node scripts/run-multi-account-test.mjs queue-lifetime",
     "test:file-drop:electron": "node scripts/run-multi-account-test.mjs file-drop && node scripts/run-multi-account-test.mjs file-drop-purchase",
     "test:goods-receipt": "esbuild scripts/goods-receipt.test.ts --bundle --platform=node --format=esm --outfile=tmp/goods-receipt.test.mjs && node --test tmp/goods-receipt.test.mjs",
     "test:goods-receipt:document": "node scripts/test-goods-receipt-document.mjs",

@@ -3,8 +3,8 @@
 import assert from 'node:assert/strict'
 import { app, BrowserWindow, dialog, nativeImage, type OpenDialogOptions, type WebContentsView } from 'electron'
 import { createServer } from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { AccountStore } from '../src/main/account-store'
 import { WindowManager } from '../src/main/window-manager'
 import { PurchaseQueueManager } from '../src/main/purchase-queue'
@@ -17,9 +17,10 @@ import type { OcrDocumentResult } from '../src/shared/ocr'
 import type { PurchaseQueueTask } from '../src/shared/purchase-queue'
 
 const dropping = process.argv.includes('file-drop') || process.argv.includes('file-drop-purchase')
-const goods = process.argv.includes('goods-queue') || process.argv.includes('file-drop')
+const lifetimeTest = process.argv.includes('queue-lifetime')
+const goods = process.argv.includes('goods-queue') || process.argv.includes('file-drop') || lifetimeTest
 const businessId = goods ? 'goods-receipt' : 'purchase-order'
-const reportName = dropping ? goods ? 'file-drop' : 'file-drop-purchase' : goods ? 'goods-queue' : 'purchase-queue'
+const reportName = lifetimeTest ? 'queue-lifetime' : dropping ? goods ? 'file-drop' : 'file-drop-purchase' : goods ? 'goods-queue' : 'purchase-queue'
 
 mkdirSync(resolve('tmp'), { recursive: true })
 const directory = mkdtempSync(resolve('tmp/purchase-queue-electron-'))
@@ -369,6 +370,52 @@ async function run(): Promise<void> {
     assert.ok(recoveredTasks.every(task => task.recognitionStatus === 'ready' && task.usageStatus === 'filled'))
     assert.equal(recognitions.length, recognitionCount)
     checks.push('Crashing the renderer while preview is open restores the ERP view; reloading recovers both cached tasks without OCR')
+    if (lifetimeTest) {
+      const oldOwner = context.purchaseQueueOwner!
+      const cacheDirectory = dirname(dirname(queue.sourcePath(oldOwner, first.taskId)))
+      const otherContext = windows.fromEvent({ sender: otherWindow.webContents, senderFrame: otherWindow.webContents.mainFrame } as Electron.IpcMainInvokeEvent)
+      const otherTask = (await queue.enqueue(otherContext.purchaseQueueOwner!, [imagePaths[0]], businessId)).added[0]
+      await until(() => queue.get(otherContext.purchaseQueueOwner!, otherTask).recognitionStatus === 'ready', 'other account ready before close')
+      window.once('close', event => event.preventDefault())
+      window.close()
+      assert.equal(window.isDestroyed(), false)
+      assert.equal((await list()).length, 2)
+      assert.equal(existsSync(cacheDirectory), true)
+      checks.push('Cancelling a window close leaves the queue and cached source files intact')
+
+      const originalExtract = extractor.extractDocument
+      const delayed: { signal: AbortSignal; finish: () => void }[] = []
+      extractor.extractDocument = async (_path, _progress, options) => new Promise(resolve => {
+        delayed.push({ signal: options.signal!, finish: () => resolve({ status: 'completed', message: '', result: resultFor('A') }) })
+      })
+      const waiting = await queue.enqueue(oldOwner, [imagePaths[0], imagePaths[1], imagePaths[0]], businessId)
+      assert.equal(delayed.length, 2)
+      assert.equal(queue.get(oldOwner, waiting.added[2]).recognitionStatus, 'queued')
+      window.close()
+      await until(() => window.isDestroyed(), 'work window actually closed')
+      assert.ok(delayed.every(call => call.signal.aborted))
+      assert.equal(existsSync(cacheDirectory), false)
+      assert.equal(queue.get(otherContext.purchaseQueueOwner!, otherTask).recognitionStatus, 'ready')
+      checks.push('Closing cancels running recognition, discards queued tasks and deletes completed results and source files, without touching another window')
+
+      windows.open(context.accountId)
+      const reopened = BrowserWindow.getAllWindows().find(candidate => candidate !== otherWindow)!
+      workWindows.push(reopened)
+      reopened.webContents.setBackgroundThrottling(false)
+      const reopenedContext = windows.fromEvent({ sender: reopened.webContents, senderFrame: reopened.webContents.mainFrame } as Electron.IpcMainInvokeEvent)
+      await until(() => reopenedContext.erpController.getState().account?.status === 'signed-in', 'same account reopened')
+      assert.notEqual(reopenedContext.purchaseQueueOwner, oldOwner)
+      assert.deepEqual(await reopened.webContents.executeJavaScript('window.desktop.purchaseQueue.list()'), [])
+      extractor.extractDocument = originalExtract
+      const newTask = (await queue.enqueue(reopenedContext.purchaseQueueOwner!, [imagePaths[0]], businessId)).added[0]
+      for (const call of delayed) call.finish()
+      await until(() => queue.get(reopenedContext.purchaseQueueOwner!, newTask).recognitionStatus === 'ready', 'new window processes fresh images after old requests settle')
+      assert.equal(queue.list(reopenedContext.purchaseQueueOwner!).length, 1)
+      assert.equal(existsSync(cacheDirectory), false)
+      assert.equal(delayed.length, 2, 'the cancelled queued file was never sent for recognition')
+      assert.equal(queue.get(otherContext.purchaseQueueOwner!, otherTask).recognitionStatus, 'ready')
+      checks.push('Reopening the same account starts empty; late old responses never restore deleted data or contaminate the new window')
+    }
     if (dropping) {
       const countBeforeDrop = recognitions.length
       const invalidPath = join(directory, 'unsupported.txt')

@@ -40,7 +40,7 @@ else {
     windows = new WindowManager(accounts, loadErpConfig())
     ocrClient = createDocumentExtractionClient()
     purchaseQueue = new PurchaseQueueManager(join(app.getPath('userData'), 'purchase-queue'), ocrClient,
-      owner => windows.sendPurchaseQueueChanged(owner))
+      owner => windows.sendPurchaseQueueChanged(owner), { discardPreviousWindows: true })
     windows.attachPurchaseQueue(purchaseQueue)
     registerWorkflowIpc(windows, ocrClient)
     registerPurchaseQueueIpc(windows, purchaseQueue)
@@ -59,4 +59,6 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => { purchaseQueue?.shutdown() })
+// A cancelled close/quit must leave live-window queues usable. Each actual
+// closed window cancels and deletes its own queue before the app exits.
+app.on('will-quit', () => { purchaseQueue?.shutdown() })

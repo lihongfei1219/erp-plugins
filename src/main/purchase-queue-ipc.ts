@@ -11,7 +11,7 @@ function ownerOf(context: WorkWindow): string {
   context.lifetime.signal.throwIfAborted()
   context.erpController.assertAccountReady()
   if (!context.purchaseQueueOwner || !context.accountId) {
-    throw new Error('请在账号管理中保存账号并打开其工作窗口，以便隔离和恢复票据')
+    throw new Error('请在账号管理中保存账号并打开其工作窗口，以便隔离票据')
   }
   return context.purchaseQueueOwner
 }

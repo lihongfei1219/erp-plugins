@@ -6,9 +6,9 @@ import electron from 'electron'
 
 await mkdir('tmp', { recursive: true })
 const test = process.argv[2] ?? 'multi-account'
-if (!['multi-account', 'erp-navigation', 'session-cache', 'purchase-queue', 'goods-queue', 'file-drop', 'file-drop-purchase'].includes(test)) throw new Error('Unknown Electron regression')
+if (!['multi-account', 'erp-navigation', 'session-cache', 'purchase-queue', 'goods-queue', 'file-drop', 'file-drop-purchase', 'queue-lifetime'].includes(test)) throw new Error('Unknown Electron regression')
 const output = `tmp/${test}.electron-test.mjs`
-await build({ entryPoints: [`scripts/${['goods-queue', 'file-drop', 'file-drop-purchase'].includes(test) ? 'purchase-queue' : test}.electron-test.ts`], outfile: output,
+await build({ entryPoints: [`scripts/${['goods-queue', 'file-drop', 'file-drop-purchase', 'queue-lifetime'].includes(test) ? 'purchase-queue' : test}.electron-test.ts`], outfile: output,
   bundle: true, packages: 'external', platform: 'node', format: 'esm', external: ['electron'],
   define: { __dirname: JSON.stringify(resolve('out/main')) }, logLevel: 'warning' })
 const env = { ...process.env }

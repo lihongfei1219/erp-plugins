@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain, screen, session, type IpcMainInvokeEvent } from 'electron'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { AccountStore, SavedBounds } from './account-store'
 import { ACCOUNT_IPC } from '../shared/accounts'
 import { ERP_IPC } from '../shared/erp'
@@ -90,7 +91,9 @@ export class WindowManager {
       existing.mainWindow.show(); existing.mainWindow.focus(); return
     }
     const account = accountId ? this.accounts.get(accountId) : undefined
-    const purchaseQueueOwner = account ? this.queueOwner(this.accounts.partition(account.id)) : null
+    // A reopened account gets a new queue, even if an old request or locked
+    // cache file outlives the previous native window.
+    const purchaseQueueOwner = account ? `${this.queueOwner(this.accounts.partition(account.id))}:${randomUUID()}` : null
     const bounds = accountId ? this.validBounds(this.accounts.bounds(accountId)) : undefined
     const window = new BrowserWindow({ width: 1280, height: 800, ...bounds, minWidth: 960, minHeight: 640,
       title: account ? `${account.label} (${account.username}) · ERP 票据助手` : '手动登录 · ERP 票据助手',
@@ -104,6 +107,7 @@ export class WindowManager {
     }
     let previousIdentityStatus: string | undefined
     const erpController = new ErpViewController(window, this.config, state => {
+      if (lifetime.signal.aborted) return
       if (previousIdentityStatus === 'signed-in' && state.account?.status !== 'signed-in') workflowSessions.clear()
       previousIdentityStatus = state.account?.status
       workflowSessions.retainOpenPages(state.openPageIds)
@@ -136,7 +140,8 @@ export class WindowManager {
       erpController.dispose()
       workflowSessions.clear()
       if (purchaseQueueOwner) {
-        try { this.purchaseQueue?.retainPages(purchaseQueueOwner, []) } catch { /* Persisted results remain recoverable. */ }
+        try { this.purchaseQueue?.removeOwner(purchaseQueueOwner) }
+        catch { /* Locked cache remnants are cleaned at startup and never reused by a new window. */ }
       }
       this.windows.delete(senderId)
       this.broadcast()

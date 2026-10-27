@@ -437,7 +437,7 @@ onBeforeUnmount(() => {
         :disabled="!signedIn || importing || filling" @click="addImages()">
         {{ importing ? '正在加入图片…' : visibleTasks.length ? '继续添加图片' : '批量选择图片并识别' }}
       </button>
-      <p v-if="isQueuePage" class="purchase-hint">也可将多张图片或 PDF 拖入软件界面，直接开始识别，无需再次筛选。结果保存在本机，可在后续新建{{ businessName }}时使用。</p>
+      <p v-if="isQueuePage" class="purchase-hint">也可将多张图片或 PDF 拖入软件界面，直接开始识别，无需再次筛选。当前窗口内新建{{ businessName }}可复用结果；关闭工作窗口后，全部票据缓存和未完成任务都会清空。</p>
       <p v-if="notice && isQueuePage" class="purchase-notice" role="status">{{ notice }}</p>
       <p v-if="error" class="purchase-error" role="alert">{{ error }}</p>
       <ul v-if="importErrors.length && isQueuePage" class="purchase-import-errors" aria-label="未加入的图片">
