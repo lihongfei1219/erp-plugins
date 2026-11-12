@@ -65,12 +65,23 @@ async function run(): Promise<void> {
   ipcMain.handle(ERP_IPC.setAssistantWidth, () => {})
   ipcMain.handle(OCR_IPC.selectDocument, (_event, request) => {
     sessions.bindToPage(request.sessionId, request.businessId, request.pageId)
-    return { status: 'ready', message: '', preview: { ...request, token: 'test', fileName: 'receipt.png', pageCount: 1, pages: [{ pageNumber: 1, thumbnailDataUrl: '' }] } }
+    return {
+      status: 'ready', message: '',
+      batch: { ...request, token: 'test', items: [{ id: 'item', fileName: 'receipt.png', status: 'queued', message: '等待识别', pageCount: null }] }
+    }
   })
   ipcMain.handle(OCR_IPC.extractDocument, (_event, request) => {
     recognitions++
     sessions.complete(request.sessionId, request.businessId, extraction)
-    return { status: 'completed', message: '', result: { businessId: 'unit-initial-approval', fileName: 'receipt.png', pageCount: 1, coveragePercent: 100, pages: [], warnings: [], extractedData: extraction } }
+    return {
+      status: 'completed', message: '',
+      result: {
+        businessId: 'unit-initial-approval', fileName: 'receipt.png', pageCount: 1,
+        blockCount: 0, ocrPages: 1, engine: 'test', modelVersion: 'test', elapsedMs: 1,
+        coveragePercent: 100, pages: [], warnings: [], extractedData: extraction,
+        batchItems: [{ id: 'item', fileName: 'receipt.png', status: 'completed', message: '识别成功', pageCount: 1 }]
+      }
+    }
   })
   ipcMain.handle(ERP_IPC.fillSession, async (_event, request) => {
     filledSessionIds.push(request.sessionId)
@@ -86,8 +97,7 @@ async function run(): Promise<void> {
     await until(() => buttonVisible(label))
     await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === ${JSON.stringify(label)}).click()`)
   }
-  await click('选择票据并筛选页面')
-  await click('开始识别 1 页')
+  await click('选择单位资料并识别')
   await click('确认并代填')
   await until(() => buttonVisible('重新代填'))
   await erp.executeJavaScript(`document.getElementById('a').contentWindow.gridEditBody.getRows().splice(0); void 0`)
@@ -100,7 +110,7 @@ async function run(): Promise<void> {
 
   await erp.executeJavaScript(`document.getElementById('a').style.display='none';document.getElementById('b').style.display='block'`)
   await until(() => controller.getState().currentPage?.pageId !== original)
-  await until(() => buttonVisible('选择票据并筛选页面'))
+  await until(() => buttonVisible('选择单位资料并识别'))
   assert.equal(await buttonVisible('重新代填'), false)
   assert.equal(sessions.getExtraction(filledSessionIds[0], 'unit-initial-approval'), extraction)
   const wrongPage = await controller.fillExtractedData('unit-initial-approval', extraction, original)
@@ -113,7 +123,7 @@ async function run(): Promise<void> {
   await until(() => !controller.getState().openPageIds.includes(original))
   assert.throws(() => sessions.getExtraction(filledSessionIds[0], 'unit-initial-approval'))
   assert.throws(() => sessions.complete(filledSessionIds[0], 'unit-initial-approval', extraction))
-  await until(() => buttonVisible('选择票据并筛选页面'))
+  await until(() => buttonVisible('选择单位资料并识别'))
   report.push('Removing an ERP iframe without navigation clears its cache and rejects late recognition completion')
 
   const beforeReload = controller.getState().currentPage!.pageId!

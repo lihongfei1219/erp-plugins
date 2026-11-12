@@ -649,6 +649,59 @@ code {
 .detail-list p { margin: 7px 0 4px; color: #536078; font-size: 10px; }
 .detail-list small { color: #8792a5; font-size: 9px; }
 
+.batch-file-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.batch-file-list article {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px;
+  border-left: 3px solid #b9c9e8;
+  border-radius: 8px;
+  background: #f7f9fc;
+}
+
+.batch-file-list article[data-status='completed'] { border-left-color: #49a779; }
+.batch-file-list article[data-status='failed'] { border-left-color: #d66a6a; }
+.batch-file-list article[data-status='recognizing'] { border-left-color: #5d86d5; }
+
+.batch-file-list article > span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 6px;
+  color: #315aab;
+  background: #e8effc;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.batch-file-list article > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.batch-file-list strong,
+.batch-file-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-file-list strong { color: #334057; font-size: 10px; }
+.batch-file-list small { color: #8792a5; font-size: 8px; }
+.batch-file-list em { color: #6a7790; font-size: 8px; font-style: normal; font-weight: 800; }
+.batch-file-list article[data-status='completed'] em { color: #21714d; }
+.batch-file-list article[data-status='failed'] em { color: #a43f3f; }
+
 .issues-card summary,
 .ocr-details > summary {
   color: #4d5d77;

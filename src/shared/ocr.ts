@@ -7,31 +7,34 @@ export const OCR_IPC = {
   progress: 'ocr:progress'
 } as const
 
-export interface OcrDocumentPreviewPage {
-  pageNumber: number
-  thumbnailDataUrl: string
+export type OcrBatchItemStatus = 'queued' | 'recognizing' | 'completed' | 'failed'
+
+export interface OcrDocumentBatchItem {
+  id: string
+  fileName: string
+  status: OcrBatchItemStatus
+  message: string
+  pageCount: number | null
 }
 
-export interface OcrDocumentPreview {
+export interface OcrDocumentBatch {
   sessionId: string
   businessId: BusinessId
   token: string
-  fileName: string
-  pageCount: number
-  pages: OcrDocumentPreviewPage[]
+  items: OcrDocumentBatchItem[]
 }
 
-export interface OcrPreviewResult {
+export interface OcrSelectionResult {
   status: 'cancelled' | 'ready' | 'failed'
   message: string
-  preview: OcrDocumentPreview | null
+  batch: OcrDocumentBatch | null
 }
 
 export interface OcrExtractionRequest {
   sessionId: string
   businessId: BusinessId
   token: string
-  excludedPages: number[]
+  retryFailed?: boolean
 }
 
 export interface OcrCancelRequest {
@@ -60,6 +63,7 @@ export type OcrStage =
   | 'recognizing'
   | 'extracting'
   | 'completed'
+
 export interface OcrProgress {
   sessionId: string
   businessId: BusinessId
@@ -67,6 +71,11 @@ export interface OcrProgress {
   current: number
   total: number
   message: string
+  itemId?: string
+  itemStatus?: OcrBatchItemStatus
+  fileName?: string
+  completedItems?: number
+  failedItems?: number
 }
 
 export interface OcrBlock {
@@ -95,6 +104,7 @@ export interface OcrDocumentResult {
   warnings: string[]
   pages: OcrPage[]
   extractedData: BusinessExtraction | null
+  batchItems?: OcrDocumentBatchItem[]
 }
 
 export interface OcrClientResult {

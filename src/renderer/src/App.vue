@@ -11,13 +11,12 @@ import {
   type WorkflowSession
 } from '../../shared/business'
 import type { ErpAutofillResult, ErpState } from '../../shared/erp'
-import type { OcrClientResult, OcrDocumentPreview, OcrProgress } from '../../shared/ocr'
+import type { OcrClientResult, OcrDocumentBatch, OcrProgress } from '../../shared/ocr'
 import type { FileDropFeedback } from '../../shared/file-drop'
 
 interface ClientWorkflowSession extends WorkflowSession {
   pageId: string
-  preview: OcrDocumentPreview | null
-  selectedPageNumbers: number[]
+  batch: OcrDocumentBatch | null
   progress: OcrProgress | null
   result: OcrClientResult | null
 }
@@ -64,8 +63,8 @@ async function handleDrop(value: FileDropFeedback): Promise<void> {
     await nextTick()
     const page = erpState.value.currentPage
     if (page?.businessId !== value.businessId || page.pageId !== value.pageId) throw new Error('业务页面已切换，请在目标页面重新拖入')
-    if (document.querySelector('.preview-backdrop') || recognitionRunning.value || autofillStatus.value === 'running') {
-      throw new Error('请先完成当前识别、代填或关闭预览，再拖入新文件')
+    if (recognitionRunning.value || autofillStatus.value === 'running') {
+      throw new Error('请先完成当前识别或代填，再拖入新文件')
     }
     if (value.businessId === 'unit-initial-approval') await selectDocument(value.token)
     else {
@@ -79,7 +78,6 @@ async function handleDrop(value: FileDropFeedback): Promise<void> {
 onBeforeUnmount(() => unsubscribeDrops?.())
 const sessions = ref<Record<string, ClientWorkflowSession>>({})
 const activeSessionId = ref<string | null>(null)
-const focusedPreviewPage = ref<OcrDocumentPreview['pages'][number] | null>(null)
 const autofillStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
 const autofillResult = ref<ErpAutofillResult | null>(null)
 
@@ -107,20 +105,10 @@ const activeSession = computed(() => {
   const session = sessions.value[sessionId] ?? null
   return session?.businessId === currentBusinessId.value && session.pageId === erpState.value.currentPage?.pageId ? session : null
 })
-const currentPreview = computed(() => activeSession.value?.preview ?? null)
-const selectedPageNumbers = computed(() => activeSession.value?.selectedPageNumbers ?? [])
-const selectedPageCount = computed(() => selectedPageNumbers.value.length)
-const excludedPageNumbers = computed(() => {
-  const selected = new Set(selectedPageNumbers.value)
-  return currentPreview.value?.pages
-    .map((page) => page.pageNumber)
-    .filter((pageNumber) => !selected.has(pageNumber)) ?? []
-})
-const canStartExtraction = computed(
-  () => currentPreview.value !== null && selectedPageCount.value > 0
-)
+const batchItems = computed(() => activeSession.value?.batch?.items ?? [])
+const failedBatchItems = computed(() => batchItems.value.filter((item) => item.status === 'failed'))
 const recognitionRunning = computed(
-  () => activeSession.value?.status === 'previewing' || activeSession.value?.status === 'recognizing'
+  () => activeSession.value?.status === 'recognizing'
 )
 const ocrResult = computed(() => activeSession.value?.result ?? null)
 const extractedData = computed(() => ocrResult.value?.result?.extractedData ?? null)
@@ -134,7 +122,7 @@ const ocrProgressPercent = computed(() => {
 })
 const workflowStep = computed(() => {
   const status = activeSession.value?.status
-  if (!status || status === 'ready' || status === 'previewing') return 1
+  if (!status || status === 'ready') return 1
   if (status === 'recognizing') return 2
   if (status === 'reviewing' || status === 'failed') return 3
   return 4
@@ -149,7 +137,7 @@ const canConfirmAutofill = computed(
   )
 )
 const workflowSteps = [
-  { number: 1, label: '选择票据' },
+  { number: 1, label: '选择资料' },
   { number: 2, label: 'OCR识别' },
   { number: 3, label: '核对匹配' },
   { number: 4, label: '确认代填' }
@@ -213,8 +201,7 @@ function createSession(businessId: BusinessId): ClientWorkflowSession {
     pageId: erpState.value.currentPage!.pageId!,
     status: 'ready',
     createdAt: Date.now(),
-    preview: null,
-    selectedPageNumbers: [],
+    batch: null,
     progress: null,
     result: null
   }
@@ -252,104 +239,101 @@ async function fillFixture(): Promise<void> {
 
 async function selectDocument(dropToken?: string): Promise<void> {
   const businessId = currentBusinessId.value
-  if (!businessId || (businessId === 'purchase-order' || businessId === 'goods-receipt') || !currentPageReady.value) return
+  if (businessId !== 'unit-initial-approval' || !currentPageReady.value) return
   const session = createSession(businessId)
   autofillResult.value = null
   patchSession(session.sessionId, {
-    status: 'previewing',
+    status: 'recognizing',
     progress: {
-      sessionId: session.sessionId, businessId, stage: 'queued', current: 0, total: 0,
-      message: '选择票据后将在本地生成页面预览'
+      sessionId: session.sessionId,
+      businessId,
+      stage: 'queued',
+      current: 0,
+      total: 0,
+      message: '请选择单位首营资料，可一次选择多张图片'
     }
   })
   try {
-    const result = await window.desktop.ocr.selectDocument({ sessionId: session.sessionId, businessId, pageId: session.pageId, dropToken })
-    if (result.status === 'cancelled') {
+    const selection = await window.desktop.ocr.selectDocument({
+      sessionId: session.sessionId,
+      businessId,
+      pageId: session.pageId,
+      dropToken
+    })
+    if (selection.status === 'cancelled') {
       patchSession(session.sessionId, { status: 'ready', progress: null })
       return
     }
-    if (result.status === 'failed' || !result.preview) {
+    if (selection.status === 'failed' || !selection.batch) {
       patchSession(session.sessionId, {
-        status: 'failed', progress: null,
-        result: { status: 'failed', message: result.message, result: null }
+        status: 'failed',
+        progress: null,
+        result: { status: 'failed', message: selection.message, result: null }
       })
       return
     }
-    if (result.preview.businessId !== businessId || result.preview.sessionId !== session.sessionId) {
-      throw new Error('预览结果与当前业务会话不一致')
+    if (selection.batch.businessId !== businessId || selection.batch.sessionId !== session.sessionId) {
+      throw new Error('导入结果与当前单位首营会话不一致')
     }
-    patchSession(session.sessionId, {
-      status: 'previewing', preview: result.preview,
-      selectedPageNumbers: result.preview.pages.map((page) => page.pageNumber), progress: null
-    })
-  } catch (error) {
-    patchSession(session.sessionId, {
-      status: 'failed', progress: null,
-      result: { status: 'failed', message: error instanceof Error ? error.message : 'OCR 请求失败', result: null }
-    })
-  }
-}
-
-function togglePreviewPage(pageNumber: number, selected: boolean): void {
-  const session = activeSession.value
-  if (!session) return
-  const next = new Set(session.selectedPageNumbers)
-  if (selected) next.add(pageNumber)
-  else next.delete(pageNumber)
-  patchSession(session.sessionId, { selectedPageNumbers: [...next].sort((a, b) => a - b) })
-}
-
-function handlePreviewPageChange(pageNumber: number, event: Event): void {
-  const input = event.target
-  if (input instanceof HTMLInputElement) togglePreviewPage(pageNumber, input.checked)
-}
-
-function selectAllPreviewPages(): void {
-  const session = activeSession.value
-  if (session?.preview) patchSession(session.sessionId, { selectedPageNumbers: session.preview.pages.map((page) => page.pageNumber) })
-}
-
-function excludeAllPreviewPages(): void {
-  const session = activeSession.value
-  if (session) patchSession(session.sessionId, { selectedPageNumbers: [] })
-}
-
-function cancelDocumentPreview(): void {
-  const session = activeSession.value
-  if (!session?.preview) return
-  const request = { sessionId: session.sessionId, businessId: session.businessId, token: session.preview.token }
-  patchSession(session.sessionId, { status: 'ready', preview: null, selectedPageNumbers: [], progress: null })
-  focusedPreviewPage.value = null
-  void window.desktop.ocr.cancelDocument(request)
-}
-
-async function startExtraction(): Promise<void> {
-  const session = activeSession.value
-  const preview = session?.preview
-  if (!session || (session.businessId === 'purchase-order' || session.businessId === 'goods-receipt') || !preview || selectedPageCount.value === 0) return
-  const excludedPages = [...excludedPageNumbers.value]
-  patchSession(session.sessionId, {
-    status: 'recognizing', preview: null, selectedPageNumbers: [], result: null,
-    progress: {
-      sessionId: session.sessionId, businessId: session.businessId, stage: 'queued', current: 0,
-      total: preview.pageCount,
-      message: excludedPages.length ? `已在本地排除 ${excludedPages.length} 页，等待开始识别` : '等待开始识别'
-    }
-  })
-  focusedPreviewPage.value = null
-  try {
-    const result = await window.desktop.ocr.extractDocument({
-      sessionId: session.sessionId, businessId: session.businessId,
-      token: preview.token, excludedPages
-    })
-    if (result.result && result.result.businessId !== session.businessId) throw new Error('识别结果与当前业务会话不一致')
-    patchSession(session.sessionId, { status: result.status === 'completed' ? 'reviewing' : 'failed', result })
+    patchSession(session.sessionId, { batch: selection.batch })
+    await runExtraction(session.sessionId, selection.batch, false)
   } catch (error) {
     patchSession(session.sessionId, {
       status: 'failed',
-      result: { status: 'failed', message: error instanceof Error ? error.message : 'OCR 请求失败', result: null }
+      progress: null,
+      result: { status: 'failed', message: error instanceof Error ? error.message : '单位资料识别请求失败', result: null }
     })
   }
+}
+
+async function runExtraction(
+  sessionId: string,
+  batch: OcrDocumentBatch,
+  retryFailed: boolean
+): Promise<void> {
+  patchSession(sessionId, {
+    status: 'recognizing',
+    progress: {
+      sessionId,
+      businessId: batch.businessId,
+      stage: 'queued',
+      current: 0,
+      total: retryFailed ? batch.items.filter((item) => item.status === 'failed').length : batch.items.length,
+      message: retryFailed ? '正在重试识别失败的文件' : `正在识别 ${batch.items.length} 个单位资料文件`
+    }
+  })
+  try {
+    const result = await window.desktop.ocr.extractDocument({
+      sessionId,
+      businessId: batch.businessId,
+      token: batch.token,
+      retryFailed
+    })
+    if (result.result && result.result.businessId !== batch.businessId) {
+      throw new Error('识别结果与当前单位首营会话不一致')
+    }
+    const nextBatch = result.result?.batchItems
+      ? { ...batch, items: result.result.batchItems }
+      : batch
+    patchSession(sessionId, {
+      status: result.status === 'completed' ? 'reviewing' : 'failed',
+      batch: nextBatch,
+      progress: null,
+      result
+    })
+  } catch (error) {
+    patchSession(sessionId, {
+      status: 'failed',
+      progress: null,
+      result: { status: 'failed', message: error instanceof Error ? error.message : '单位资料识别请求失败', result: null }
+    })
+  }
+}
+
+async function retryFailedDocuments(): Promise<void> {
+  const session = activeSession.value
+  if (!session?.batch || failedBatchItems.value.length === 0 || recognitionRunning.value) return
+  await runExtraction(session.sessionId, session.batch, true)
 }
 
 async function confirmAutofill(): Promise<void> {
@@ -390,14 +374,22 @@ onMounted(async () => {
       Object.values(sessions.value).filter(session => session.pageId === state.currentPage?.pageId)
         .sort((a, b) => b.createdAt - a.createdAt)[0]?.sessionId ?? null
     if (previousSessionId !== activeSessionId.value) {
-      focusedPreviewPage.value = null
       autofillResult.value = null
       autofillStatus.value = 'idle'
     }
   })
   window.desktop.ocr.onProgress((progress) => {
     const session = sessions.value[progress.sessionId]
-    if (session?.businessId === progress.businessId) patchSession(progress.sessionId, { progress })
+    if (session?.businessId !== progress.businessId) return
+    const batch = session.batch && progress.itemId && progress.itemStatus
+      ? {
+          ...session.batch,
+          items: session.batch.items.map((item) => item.id === progress.itemId
+            ? { ...item, status: progress.itemStatus!, message: progress.message }
+            : item)
+        }
+      : session.batch
+    patchSession(progress.sessionId, { progress, batch })
   })
 })
 </script>
@@ -468,30 +460,32 @@ onMounted(async () => {
           <section v-if="!activeSession || activeSession.status === 'ready'" class="intake-card">
             <p class="eyebrow">DOCUMENT INTAKE</p><h3>选择{{ currentBusiness?.documentName }}</h3>
             <p>识别结果暂存在当前单据页，关闭该单据页后自动清除。</p>
-            <button type="button" class="primary-button" :disabled="recognitionRunning" @click="selectDocument()">选择票据并筛选页面</button>
-            <p class="purchase-hint">也可拖入一个图片或 PDF，继续按原流程预览和筛选页面。</p>
+            <button type="button" class="primary-button" :disabled="recognitionRunning" @click="selectDocument()">选择单位资料并识别</button>
+            <p class="purchase-hint">可多选或同时拖入多张图片；本批文件共同组成一个单位的首营资料。拖入仅在本页面生效。</p>
             <button type="button" class="secondary-button" :disabled="autofillStatus === 'running'" @click="fillFixture">使用{{ currentBusiness?.fixtureName }}</button>
           </section>
 
-          <section v-if="activeSession?.status === 'previewing' && !currentPreview" class="progress-card local-preview-progress" aria-live="polite" aria-busy="true">
-            <div class="section-heading">
-              <div><p class="eyebrow">LOCAL DOCUMENT PREVIEW</p><h3>{{ ocrProgress?.stage === 'rendering' ? '正在本地渲染页面' : '正在准备本地预览' }}</h3></div>
-              <strong>{{ ocrProgressPercent }}%</strong>
-            </div>
-            <div class="progress-track"><span :style="{ width: `${ocrProgressPercent}%` }"></span></div>
-            <p>{{ ocrProgress?.message ?? '正在读取文件并准备页面预览' }}</p>
-            <small>此阶段仅在本机生成缩略图，文件尚未发送给 OCR 模型</small>
-          </section>
-
           <section v-if="activeSession?.status === 'recognizing' && ocrProgress" class="progress-card" aria-live="polite">
-            <div class="section-heading"><div><p class="eyebrow">OCR PIPELINE</p><h3>正在识别{{ currentBusiness?.documentName }}</h3></div><strong>{{ ocrProgressPercent }}%</strong></div>
+            <div class="section-heading"><div><p class="eyebrow">UNIT DOCUMENT BATCH</p><h3>正在合并识别单位资料</h3></div><strong>{{ ocrProgressPercent }}%</strong></div>
             <div class="progress-track"><span :style="{ width: `${ocrProgressPercent}%` }"></span></div>
             <p>{{ ocrProgress.message }}</p><small>会话 {{ activeSession.sessionId.slice(0, 8) }} · {{ currentBusiness?.name }}</small>
           </section>
 
+          <section v-if="batchItems.length" class="review-section batch-file-card">
+            <div class="section-title-row"><h3>单位资料文件</h3><small>共 {{ batchItems.length }} 个</small></div>
+            <div class="batch-file-list">
+              <article v-for="(item, index) in batchItems" :key="item.id" :data-status="item.status">
+                <span>{{ index + 1 }}</span>
+                <div><strong>{{ item.fileName }}</strong><small>{{ item.message }}</small></div>
+                <em>{{ item.status === 'queued' ? '等待识别' : item.status === 'recognizing' ? '识别中' : item.status === 'completed' ? '识别成功' : '识别失败' }}</em>
+              </article>
+            </div>
+          </section>
+
           <section v-if="activeSession?.status === 'failed'" class="result-state" data-error="true">
             <strong>识别未完成</strong><p>{{ ocrResult?.message ?? '当前会话处理失败' }}</p>
-            <button type="button" class="secondary-button" @click="selectDocument()">重新选择票据</button>
+            <button v-if="failedBatchItems.length" type="button" class="secondary-button" @click="retryFailedDocuments">重试失败文件</button>
+            <button type="button" class="secondary-button" @click="selectDocument()">重新选择资料</button>
           </section>
 
           <template v-if="extractedData && activeSession && ['reviewing', 'filling', 'completed'].includes(activeSession.status)">
@@ -547,6 +541,11 @@ onMounted(async () => {
               <summary>需要注意（{{ extractedData.reviewRequired.length }}）</summary>
               <p v-for="item in extractedData.reviewRequired" :key="item">{{ item }}</p>
             </details>
+            <div v-if="failedBatchItems.length" class="notice" data-error="true">
+              <strong>{{ failedBatchItems.length }} 个文件未能识别</strong>
+              <span>其他文件的结果已经合并，可重试失败文件后再代填。</span>
+              <button type="button" class="secondary-button" @click="retryFailedDocuments">只重试失败文件</button>
+            </div>
             <details v-if="ocrResult?.result" class="ocr-details">
               <summary>查看 OCR 原文和处理详情</summary>
               <p v-for="warning in ocrResult.result.warnings" :key="warning" class="warning-text">{{ warning }}</p>
@@ -566,6 +565,7 @@ onMounted(async () => {
 
         <footer v-if="!isQueueBusinessPage && activeSession?.status === 'reviewing'" class="action-bar">
           <button type="button" class="secondary-button" @click="selectDocument()">重新选择</button>
+          <button v-if="failedBatchItems.length" type="button" class="secondary-button" @click="retryFailedDocuments">重试失败文件</button>
           <button type="button" class="primary-button" :disabled="!canConfirmAutofill" @click="confirmAutofill">{{ autofillResult && autofillResult.status !== 'filled' ? '重试代填' : '确认并代填' }}</button>
         </footer>
         <footer v-else-if="!isQueueBusinessPage && activeSession?.status === 'completed'" class="action-bar completed-action">
@@ -576,29 +576,5 @@ onMounted(async () => {
       </div>
     </aside>
 
-    <div v-if="currentPreview && !isQueueBusinessPage" class="preview-backdrop" role="presentation" @click.self="cancelDocumentPreview">
-      <section class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title">
-        <header class="preview-header">
-          <div><p class="eyebrow">LOCAL PRIVACY FILTER · {{ currentBusiness?.name }}</p><h2 id="preview-title">上传前排除高敏页面</h2><p>{{ currentPreview.fileName }} · 共 {{ currentPreview.pageCount }} 页</p></div>
-          <button type="button" aria-label="关闭页面筛选" @click="cancelDocumentPreview">×</button>
-        </header>
-        <div class="privacy-guidance"><strong>缩略图仅在本机生成</strong><span>取消勾选身份证、护照、银行卡、人脸证件照等高敏页面；被排除页面不会发送给模型。</span></div>
-        <div class="preview-controls"><span>将识别 {{ selectedPageCount }} 页，排除 {{ excludedPageNumbers.length }} 页</span><div><button type="button" @click="selectAllPreviewPages">全选</button><button type="button" @click="excludeAllPreviewPages">全部排除</button></div></div>
-        <div class="preview-grid">
-          <article v-for="page in currentPreview.pages" :key="page.pageNumber" class="preview-page" :data-selected="selectedPageNumbers.includes(page.pageNumber)">
-            <label class="preview-page-toggle"><input type="checkbox" :checked="selectedPageNumbers.includes(page.pageNumber)" @change="handlePreviewPageChange(page.pageNumber, $event)" /><img :src="page.thumbnailDataUrl" :alt="`第 ${page.pageNumber} 页本地预览`" /><span>第 {{ page.pageNumber }} 页</span><small>{{ selectedPageNumbers.includes(page.pageNumber) ? '将发送识别' : '仅本地排除' }}</small></label>
-            <button type="button" class="preview-zoom-button" @click.prevent.stop="focusedPreviewPage = page">查看大图</button>
-          </article>
-        </div>
-        <footer class="preview-footer"><button type="button" class="preview-cancel" @click="cancelDocumentPreview">取消</button><button type="button" class="preview-confirm" :disabled="!canStartExtraction" @click="startExtraction">开始识别 {{ selectedPageCount }} 页</button></footer>
-        <div v-if="focusedPreviewPage" class="preview-focus-backdrop" role="presentation" @click.self="focusedPreviewPage = null">
-          <section class="preview-focus" role="dialog" aria-modal="true">
-            <header><strong>第 {{ focusedPreviewPage.pageNumber }} 页本地预览</strong><button type="button" aria-label="关闭大图" @click="focusedPreviewPage = null">×</button></header>
-            <img :src="focusedPreviewPage.thumbnailDataUrl" :alt="`第 ${focusedPreviewPage.pageNumber} 页放大预览`" />
-            <footer><span>{{ selectedPageNumbers.includes(focusedPreviewPage.pageNumber) ? '当前将发送给 OCR' : '当前仅在本地排除' }}</span><button type="button" :data-exclude="selectedPageNumbers.includes(focusedPreviewPage.pageNumber)" @click="togglePreviewPage(focusedPreviewPage.pageNumber, !selectedPageNumbers.includes(focusedPreviewPage.pageNumber))">{{ selectedPageNumbers.includes(focusedPreviewPage.pageNumber) ? '排除此页' : '恢复此页' }}</button></footer>
-          </section>
-        </div>
-      </section>
-    </div>
   </main>
 </template>

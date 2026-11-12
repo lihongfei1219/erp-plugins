@@ -13,9 +13,8 @@ import type {
   OcrCancelRequest,
   OcrClientResult,
   OcrDocumentSelectionRequest,
-  OcrDocumentPreview,
   OcrExtractionRequest,
-  OcrPreviewResult,
+  OcrSelectionResult,
   OcrProgress
 } from '../../shared/ocr'
 
@@ -35,7 +34,7 @@ interface DesktopApi {
     onStateChanged: (listener: (state: ErpState) => void) => void
   }
   readonly ocr: {
-    selectDocument: (request: OcrDocumentSelectionRequest) => Promise<OcrPreviewResult>
+    selectDocument: (request: OcrDocumentSelectionRequest) => Promise<OcrSelectionResult>
     extractDocument: (request: OcrExtractionRequest) => Promise<OcrClientResult>
     cancelDocument: (request: OcrCancelRequest) => Promise<void>
     onProgress: (listener: (progress: OcrProgress) => void) => void

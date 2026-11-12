@@ -6,13 +6,12 @@ import type { WindowManager } from './window-manager'
 import { ERP_IPC, type ErpState, type ErpBusinessRequest, type ErpFillSessionRequest } from '../shared/erp'
 import type { BusinessId } from '../shared/business'
 import type { DocumentExtractionClient } from './document-extraction-client'
+import type { ActiveDocumentBatch } from './workflow-session-manager'
 import { OCR_IPC, type OcrCancelRequest, type OcrDocumentSelectionRequest, type OcrExtractionRequest } from '../shared/ocr'
-import { createLocalDocumentPreview } from './agent/document-images'
-import { normalizeExcludedPages } from './page-selection'
 import { registerFileDropIpc, takeDroppedFiles } from './file-drop'
+import { aggregateUnitDocumentBatch, friendlyBatchError } from './unit-document-batch'
 
-const LOCAL_PREVIEW_MAX_BYTES = 100 * 1024 * 1024
-const LOCAL_PREVIEW_MAX_PAGES = 50
+const UNIT_BATCH_CONCURRENCY = 2
 
 function emptyErpState(): ErpState {
   return {
@@ -132,193 +131,240 @@ export function registerWorkflowIpc(windows: WindowManager, ocrClient: DocumentE
   })
 
   ipcMain.handle(OCR_IPC.selectDocument, async (event, value: unknown) => {
-    const { mainWindow, erpController, workflowSessions, send } = windows.fromEvent(event)
-    erpController?.setVisible(true)
+    const { mainWindow, erpController, workflowSessions } = windows.fromEvent(event)
     if (!value || typeof value !== 'object') {
-      return { status: 'failed', message: '文件选择请求无效', preview: null }
+      return { status: 'failed', message: '文件选择请求无效', batch: null }
     }
     const request = value as Partial<OcrDocumentSelectionRequest>
-    if ((request.businessId === 'purchase-order' || request.businessId === 'goods-receipt')) return { status: 'failed', message: '采购订单和商品收货登记请使用批量票据队列', preview: null }
-    if (typeof request.sessionId !== 'string' || !isBusinessId(request.businessId) || typeof request.pageId !== 'string') {
-      return { status: 'failed', message: '业务会话无效', preview: null }
+    if (
+      request.businessId !== 'unit-initial-approval' ||
+      typeof request.sessionId !== 'string' ||
+      typeof request.pageId !== 'string'
+    ) {
+      return { status: 'failed', message: '单位首营资料只能在单位首营审批新建页面导入', batch: null }
     }
+    if (!mainWindow || !erpController) {
+      return { status: 'failed', message: '客户端窗口尚未初始化', batch: null }
+    }
+
     try {
-      await erpController?.refreshPageContext()
-      if (ensureCurrentBusiness(erpController, request.businessId) !== request.pageId) throw new Error('当前单据页已切换，请重新选择票据')
+      await erpController.refreshPageContext()
+      if (ensureCurrentBusiness(erpController, request.businessId) !== request.pageId) {
+        throw new Error('请在单位首营审批新建页面选择或拖入资料')
+      }
       workflowSessions.bindToPage(request.sessionId, request.businessId, request.pageId)
     } catch (error) {
       return {
         status: 'failed',
-        message: error instanceof Error ? error.message : '当前页面不支持票据识别',
-        preview: null
+        message: error instanceof Error ? error.message : '当前页面不支持单位首营资料识别',
+        batch: null
       }
-    }
-    workflowSessions.cancel(request.sessionId)
-    if (!mainWindow) {
-      return { status: 'failed', message: '客户端窗口尚未初始化', preview: null }
     }
 
     let droppedPaths: string[] | undefined
     if (request.dropToken !== undefined) {
       try {
         droppedPaths = takeDroppedFiles(windows.fromEvent(event), request.dropToken, request.businessId)
-        if (droppedPaths.length !== 1) throw new Error('单位首营每次只支持导入一个文件')
       } catch (error) {
         workflowSessions.discard(request.sessionId)
-        return { status: 'failed', message: error instanceof Error ? error.message : '拖入文件失败', preview: null }
+        return { status: 'failed', message: error instanceof Error ? error.message : '拖入文件失败', batch: null }
       }
     }
     const selection = droppedPaths ? { canceled: false, filePaths: droppedPaths } : await dialog.showOpenDialog(mainWindow, {
-      title: '选择需要识别的票据',
-      properties: ['openFile'],
-      filters: [
-        {
-          name: '票据文件',
-          extensions: ['pdf', 'png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff', 'webp']
-        }
-      ]
+      title: '选择单位首营资料（可多选）',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{
+        name: '单位首营资料',
+        extensions: ['pdf', 'png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff', 'webp']
+      }]
     })
 
     if (selection.canceled || selection.filePaths.length === 0) {
       workflowSessions.discard(request.sessionId)
-      return { status: 'cancelled', message: '已取消选择', preview: null }
+      return { status: 'cancelled', message: '已取消选择', batch: null }
+    }
+    const filePaths = [...new Set(selection.filePaths)]
+    if (filePaths.length > 500) {
+      workflowSessions.discard(request.sessionId)
+      return { status: 'failed', message: '每批最多导入 500 个单位资料文件', batch: null }
     }
 
-    const filePath = selection.filePaths[0]
+    const token = randomUUID()
+    const items = filePaths.map((filePath) => ({
+      id: randomUUID(),
+      filePath,
+      fileName: basename(filePath),
+      status: 'queued' as const,
+      message: '等待识别',
+      pageCount: null,
+      result: null
+    }))
     try {
-      const localPreview = await createLocalDocumentPreview(
-        filePath,
-        LOCAL_PREVIEW_MAX_BYTES,
-        LOCAL_PREVIEW_MAX_PAGES,
-        (current, total) => {
-          send(OCR_IPC.progress, {
-            sessionId: request.sessionId,
-            businessId: request.businessId,
-            stage: 'rendering',
-            current,
-            total,
-            message: `正在本地生成页面预览 ${current}/${total}`
-          })
-        }
-      )
-      const token = randomUUID()
-      await erpController?.refreshPageContext()
+      await erpController.refreshPageContext()
+      if (ensureCurrentBusiness(erpController, request.businessId) !== request.pageId) {
+        throw new Error('单位首营审批页面已切换，请重新导入资料')
+      }
       workflowSessions.setPending({
         sessionId: request.sessionId,
         businessId: request.businessId,
         token,
-        filePath,
-        pageCount: localPreview.pageCount
+        items
       })
-      // WebContentsView is composed above renderer DOM regardless of z-index.
-      // Hide it while the local privacy-selection modal is visible.
-      erpController?.setVisible(false)
       return {
         status: 'ready',
-        message: `已在本地生成 ${localPreview.pageCount} 页预览，请排除高敏页面`,
-        preview: {
+        message: `已导入 ${items.length} 个单位资料文件，正在开始识别`,
+        batch: {
           sessionId: request.sessionId,
           businessId: request.businessId,
           token,
-          fileName: basename(filePath),
-          pageCount: localPreview.pageCount,
-          pages: localPreview.pages
+          items: items.map(({ id, fileName, status, message, pageCount }) => ({ id, fileName, status, message, pageCount }))
         }
       }
     } catch (error) {
-      erpController?.setVisible(true)
-      const message = error instanceof Error ? error.message : '生成本地页面预览失败'
-      return { status: 'failed', message, preview: null }
+      workflowSessions.discard(request.sessionId)
+      return { status: 'failed', message: error instanceof Error ? error.message : '导入单位资料失败', batch: null }
     }
   })
 
   ipcMain.handle(OCR_IPC.cancelDocument, (event, value: unknown) => {
-    const { erpController, workflowSessions } = windows.fromEvent(event)
-    erpController?.setVisible(true)
+    const { workflowSessions } = windows.fromEvent(event)
     if (!value || typeof value !== 'object') return
     const request = value as Partial<OcrCancelRequest>
     if (
+      request.businessId === 'unit-initial-approval' &&
       typeof request.sessionId === 'string' &&
-      isBusinessId(request.businessId) &&
       typeof request.token === 'string'
     ) workflowSessions.cancel(request.sessionId, request.token)
   })
 
   ipcMain.handle(OCR_IPC.extractDocument, async (event, request: unknown) => {
-    const { mainWindow, erpController, workflowSessions, lifetime, send } = windows.fromEvent(event)
-    // The renderer closes the preview before extraction starts. Restore the
-    // native ERP view for both normal extraction and validation-error paths.
-    erpController?.setVisible(true)
-    if (!mainWindow || !ocrClient) {
-      return { status: 'failed', message: 'OCR客户端尚未初始化', result: null }
-    }
+    const { erpController, workflowSessions, send } = windows.fromEvent(event)
     if (!request || typeof request !== 'object') {
-      return { status: 'failed', message: '页面筛选请求无效', result: null }
+      return { status: 'failed', message: '单位资料识别请求无效', result: null }
     }
-
     const candidate = request as Partial<OcrExtractionRequest>
-    if ((candidate.businessId === 'purchase-order' || candidate.businessId === 'goods-receipt')) return { status: 'failed', message: '采购订单和商品收货登记请使用批量票据队列', result: null }
     if (
+      candidate.businessId !== 'unit-initial-approval' ||
       typeof candidate.sessionId !== 'string' ||
-      !isBusinessId(candidate.businessId) ||
       typeof candidate.token !== 'string'
-    ) return { status: 'failed', message: '识别会话无效', result: null }
+    ) return { status: 'failed', message: '单位资料识别会话无效', result: null }
 
-    let selection
+    const startedAt = Date.now()
+    let activeBatch: ActiveDocumentBatch
     try {
       await erpController?.refreshPageContext()
-      if (ensureCurrentBusiness(erpController, candidate.businessId) !== workflowSessions.getPageId(candidate.sessionId, candidate.businessId)) {
-        throw new Error('票据预览属于其他单据页')
-      }
-      selection = workflowSessions.takePending(
+      if (
+        !erpController ||
+        ensureCurrentBusiness(erpController, candidate.businessId) !==
+          workflowSessions.getPageId(candidate.sessionId, candidate.businessId)
+      ) throw new Error('请保持在原单位首营审批新建页面完成识别')
+      activeBatch = workflowSessions.beginPending(
         candidate.sessionId,
         candidate.businessId,
-        candidate.token
+        candidate.token,
+        candidate.retryFailed === true
       )
     } catch (error) {
-      return {
-        status: 'failed',
-        message: error instanceof Error ? error.message : '文件选择已失效，请重新选择票据',
-        result: null
-      }
+      return { status: 'failed', message: error instanceof Error ? error.message : '单位资料识别会话已失效', result: null }
     }
 
-    let excludedPages: number[]
-    try {
-      excludedPages = normalizeExcludedPages(candidate.excludedPages, selection.pageCount)
-      if (excludedPages.length >= selection.pageCount) {
-        throw new Error('至少需要保留一页用于识别')
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '排除页码无效'
-      return { status: 'failed', message, result: null }
-    }
-
-    // A selection token is single-use and the renderer never receives the
-    // original local file path.
-    const result = await ocrClient.extractDocument(
-      selection.filePath,
-      (progress) => {
+    let nextIndex = 0
+    let completedItems = 0
+    let failedItems = 0
+    const processNext = async (): Promise<void> => {
+      while (nextIndex < activeBatch.items.length) {
+        const item = activeBatch.items[nextIndex++]
+        activeBatch.signal.throwIfAborted()
         send(OCR_IPC.progress, {
-          ...progress,
-          sessionId: selection.sessionId,
-          businessId: selection.businessId
+          sessionId: activeBatch.sessionId,
+          businessId: activeBatch.businessId,
+          stage: 'queued',
+          current: completedItems + failedItems,
+          total: activeBatch.items.length,
+          message: `${item.fileName} 等待识别`,
+          itemId: item.id,
+          itemStatus: 'recognizing',
+          fileName: item.fileName,
+          completedItems,
+          failedItems
         })
-      },
-      { businessId: selection.businessId, excludedPages, signal: lifetime.signal }
-    )
-    if (result.status === 'completed' && result.result?.extractedData) {
-      await erpController?.refreshPageContext()
-      try {
-        workflowSessions.complete(
-          selection.sessionId,
-          selection.businessId,
-          result.result.extractedData
+
+        let itemResult
+        try {
+          itemResult = await ocrClient.extractDocument(
+            item.filePath,
+            (progress) => send(OCR_IPC.progress, {
+              ...progress,
+              sessionId: activeBatch.sessionId,
+              businessId: activeBatch.businessId,
+              current: completedItems + failedItems,
+              total: activeBatch.items.length,
+              message: `${item.fileName}：${progress.message}`,
+              itemId: item.id,
+              itemStatus: 'recognizing',
+              fileName: item.fileName,
+              completedItems,
+              failedItems
+            }),
+            { businessId: activeBatch.businessId, signal: activeBatch.signal }
+          )
+        } catch (error) {
+          itemResult = {
+            status: 'failed' as const,
+            message: error instanceof Error ? error.message : '识别请求异常',
+            result: null
+          }
+        }
+        activeBatch.signal.throwIfAborted()
+        const succeeded = itemResult.status === 'completed' && Boolean(itemResult.result?.extractedData)
+        const message = succeeded ? itemResult.message : friendlyBatchError(itemResult.message)
+        workflowSessions.recordPendingItem(
+          activeBatch.sessionId,
+          activeBatch.businessId,
+          activeBatch.token,
+          item.id,
+          itemResult,
+          message
         )
-      } catch {
-        return { status: 'failed', message: '原单据页已关闭，识别结果已丢弃', result: null }
+        if (succeeded) completedItems++
+        else failedItems++
+        send(OCR_IPC.progress, {
+          sessionId: activeBatch.sessionId,
+          businessId: activeBatch.businessId,
+          stage: completedItems + failedItems === activeBatch.items.length ? 'completed' : 'extracting',
+          current: completedItems + failedItems,
+          total: activeBatch.items.length,
+          message: succeeded ? `${item.fileName} 识别完成` : `${item.fileName}：${message}`,
+          itemId: item.id,
+          itemStatus: succeeded ? 'completed' : 'failed',
+          fileName: item.fileName,
+          completedItems,
+          failedItems
+        })
       }
     }
-    return result
+
+    try {
+      await Promise.all(Array.from(
+        { length: Math.min(UNIT_BATCH_CONCURRENCY, activeBatch.items.length) },
+        () => processNext()
+      ))
+      const selection = workflowSessions.finishPending(
+        activeBatch.sessionId,
+        activeBatch.businessId,
+        activeBatch.token
+      )
+      const result = aggregateUnitDocumentBatch(selection, Date.now() - startedAt)
+      if (result.result?.extractedData) {
+        workflowSessions.complete(activeBatch.sessionId, activeBatch.businessId, result.result.extractedData)
+      }
+      return result
+    } catch (error) {
+      if (activeBatch.signal.aborted) {
+        return { status: 'cancelled', message: '单位首营页面已切换、关闭或识别已取消', result: null }
+      }
+      try { workflowSessions.finishPending(activeBatch.sessionId, activeBatch.businessId, activeBatch.token) } catch { /* Session has already been discarded. */ }
+      return { status: 'failed', message: friendlyBatchError(error instanceof Error ? error.message : '批量识别失败'), result: null }
+    }
   })
 }

@@ -16,7 +16,7 @@ import {
   type OcrClientResult,
   type OcrDocumentSelectionRequest,
   type OcrExtractionRequest,
-  type OcrPreviewResult,
+  type OcrSelectionResult,
   type OcrProgress
 } from '../shared/ocr'
 
@@ -85,7 +85,7 @@ if (!erpDropOnly) contextBridge.exposeInMainWorld(
       }
     }),
     ocr: Object.freeze({
-      selectDocument: (request: OcrDocumentSelectionRequest): Promise<OcrPreviewResult> =>
+      selectDocument: (request: OcrDocumentSelectionRequest): Promise<OcrSelectionResult> =>
         ipcRenderer.invoke(OCR_IPC.selectDocument, request),
       extractDocument: (request: OcrExtractionRequest): Promise<OcrClientResult> =>
         ipcRenderer.invoke(OCR_IPC.extractDocument, request),

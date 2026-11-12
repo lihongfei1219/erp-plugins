@@ -45,7 +45,6 @@ export function registerFileDropIpc(windows: WindowManager): void {
         if (original?.pageId !== page.pageId || original.businessId !== page.businessId) throw new Error('业务页面正在切换，请稍后重新拖入')
         if (page.businessId !== 'unit-initial-approval' && !context.accountId) throw new Error('请从账号管理打开已保存的账号后使用批量识别')
         const paths = [...new Set(value as string[])]
-        if (page.businessId === 'unit-initial-approval' && paths.length !== 1) throw new Error('单位首营每次请拖入一个图片或 PDF，随后按原流程筛选页面')
         const token = randomUUID()
         pending.set(context, { token, paths, businessId: page.businessId, pageId: page.pageId, expires: Date.now() + 120000 })
         send({ kind: 'ready', token, businessId: page.businessId, pageId: page.pageId, count: paths.length })

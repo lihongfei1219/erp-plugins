@@ -17,6 +17,7 @@
     "test:bailian-models:prompt": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-qwen-ocr.ps1",
     "test:ocr-recovery": "node --experimental-strip-types --test scripts/ocr-recovery.test.mjs",
     "test:incremental-extraction": "esbuild scripts/incremental-extraction.test.ts --bundle --platform=node --format=esm --outfile=tmp/incremental-extraction.test.mjs && node --test tmp/incremental-extraction.test.mjs",
+    "test:unit-document-batch": "esbuild scripts/unit-document-batch.test.ts --bundle --platform=node --format=esm --outfile=tmp/unit-document-batch.test.mjs && node --test tmp/unit-document-batch.test.mjs",
     "test:business-isolation": "esbuild scripts/business-isolation.test.ts --bundle --platform=node --format=esm --outfile=tmp/business-isolation.test.mjs && node --test tmp/business-isolation.test.mjs",
     "test:accounts": "esbuild scripts/account-store.test.ts --bundle --platform=node --format=esm --outfile=tmp/account-store.test.mjs && node --test tmp/account-store.test.mjs",
     "test:multi-account": "node scripts/run-multi-account-test.mjs",

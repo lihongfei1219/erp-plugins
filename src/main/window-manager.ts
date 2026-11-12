@@ -111,6 +111,7 @@ export class WindowManager {
       if (previousIdentityStatus === 'signed-in' && state.account?.status !== 'signed-in') workflowSessions.clear()
       previousIdentityStatus = state.account?.status
       workflowSessions.retainOpenPages(state.openPageIds)
+      if (state.currentPage?.pageId) workflowSessions.cancelRunningOutsidePage(state.currentPage.pageId)
       if (purchaseQueueOwner && this.purchaseQueue) {
         try {
           if (state.account?.status === 'signed-in') {

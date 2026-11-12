@@ -12,6 +12,7 @@ import { registerPurchaseQueueIpc } from '../src/main/purchase-queue-ipc'
 import { registerWorkflowIpc } from '../src/main/workflow-ipc'
 import { normalizeGoodsReceiptSubmission } from '../src/main/businesses/goods-receipt-tool'
 import { normalizePurchaseOrderSubmission } from '../src/main/businesses/purchase-order-tool'
+import { normalizeUnitInitialApprovalSubmission } from '../src/main/agent/unit-initial-approval-tool'
 import type { DocumentExtractionClient } from '../src/main/document-extraction-client'
 import type { OcrDocumentResult } from '../src/shared/ocr'
 import type { PurchaseQueueTask } from '../src/shared/purchase-queue'
@@ -453,16 +454,34 @@ async function run(): Promise<void> {
 
       await erp.executeJavaScript(`document.getElementById('b').src = '/unit'`)
       await until(() => context.erpController.getState().currentPage?.businessId === 'unit-initial-approval', 'unit editor active')
+      const queueExtract = extractor.extractDocument
+      let unitRecognitions = 0
+      extractor.extractDocument = async (filePath, _progress, options) => {
+        assert.equal(options.businessId, 'unit-initial-approval')
+        unitRecognitions++
+        const name = readFileSync(filePath).equals(firstImage) ? 'A' : 'B'
+        const extractedData = normalizeUnitInitialApprovalSubmission({
+          header: { unitName: `合成单位 ${name}`, businessLicenseNo: `LICENSE-${name}`, businessScope: [] },
+          qualificationRows: [{ dataType: `合成资料 ${name}`, certificateNo: `CERT-${name}`, sourcePages: [1] }],
+          evidence: [], reviewRequired: []
+        }, 1)
+        return {
+          status: 'completed', message: '识别完成',
+          result: {
+            businessId: 'unit-initial-approval', fileName: `${name}.png`, pageCount: 1,
+            blockCount: 0, ocrPages: 1, engine: 'synthetic-offline', modelVersion: 'test', elapsedMs: 1,
+            coveragePercent: 100, warnings: [], pages: [], extractedData
+          }
+        }
+      }
       await dropFiles(erp, imagePaths, 150, 150)
-      await until(() => script<boolean>(`document.querySelector('[data-testid="file-drop-error"]')?.textContent.includes('每次请拖入一个') ?? false`), 'unit multi-file drop rejected without truncation')
-      await dropFiles(erp, [imagePaths[0]], 150, 150)
-      await until(() => script<boolean>(`Boolean(document.querySelector('.preview-dialog input[type="checkbox"]'))`), 'unit drop opens the original page filter')
-      assert.equal(erpView.getVisible(), false)
-      assert.equal(recognitions.length, countBeforeDrop + 1, 'unit drop must not automatically call OCR')
+      await until(() => script<number>(`document.querySelectorAll('.batch-file-list article[data-status="completed"]').length`) === 2, 'unit multi-file drop recognized as one dossier')
+      assert.equal(erpView.getVisible(), true)
+      assert.equal(unitRecognitions, 2)
       assert.equal(selectionOptions, undefined)
-      await script(`document.querySelector('button[aria-label="关闭页面筛选"]').click()`)
-      await until(() => erpView.getVisible(), 'closing unit filter restores ERP')
-      checks.push('Non-new forms reject drops; unit approval accepts one file into its original privacy filter and never auto-recognizes')
+      assert.equal(await script<boolean>(`Boolean(document.querySelector('.preview-dialog'))`), false)
+      extractor.extractDocument = queueExtract
+      checks.push('Non-new forms reject drops; unit approval accepts multiple images as one dossier, starts OCR immediately and never opens the privacy filter')
     }
   } finally {
     releaseSecond()

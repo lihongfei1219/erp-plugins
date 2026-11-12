@@ -226,7 +226,6 @@ export function isBusinessExtractionFor(
 
 export type WorkflowStatus =
   | 'ready'
-  | 'previewing'
   | 'recognizing'
   | 'reviewing'
   | 'filling'

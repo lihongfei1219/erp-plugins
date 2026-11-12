@@ -70,16 +70,18 @@ test('pending document tokens cannot cross business boundaries', () => {
     sessionId: 'session-a',
     businessId: 'unit-initial-approval',
     token: 'token-a',
-    filePath: 'unit.pdf',
-    pageCount: 2
+    items: [{
+      id: 'item-a', filePath: 'unit.pdf', fileName: 'unit.pdf', status: 'queued',
+      message: 'waiting', pageCount: null, result: null
+    }]
   })
 
   assert.throws(
-    () => sessions.takePending('session-a', 'goods-receipt', 'token-a'),
+    () => sessions.beginPending('session-a', 'goods-receipt', 'token-a'),
     /其他业务/
   )
   assert.equal(
-    sessions.takePending('session-a', 'unit-initial-approval', 'token-a').filePath,
+    sessions.beginPending('session-a', 'unit-initial-approval', 'token-a').items[0].filePath,
     'unit.pdf'
   )
 })
@@ -124,11 +126,14 @@ test('closing one page clears only its cached data and rejects late OCR completi
     sessions.complete(`session-${id}`, 'unit-initial-approval', unitExtraction)
   }
   sessions.bindToPage('pending-a', 'unit-initial-approval', 'page-a')
-  sessions.setPending({ sessionId: 'pending-a', businessId: 'unit-initial-approval', token: 'token', filePath: 'x.pdf', pageCount: 1 })
+  sessions.setPending({
+    sessionId: 'pending-a', businessId: 'unit-initial-approval', token: 'token',
+    items: [{ id: 'item', filePath: 'x.pdf', fileName: 'x.pdf', status: 'queued', message: 'waiting', pageCount: null, result: null }]
+  })
   sessions.retainOpenPages(['page-b'])
   assert.throws(() => sessions.getExtraction('session-a', 'unit-initial-approval'), /失效/)
   assert.throws(() => sessions.complete('session-a', 'unit-initial-approval', unitExtraction), /已关闭/)
-  assert.throws(() => sessions.takePending('pending-a', 'unit-initial-approval', 'token'), /失效/)
+  assert.throws(() => sessions.beginPending('pending-a', 'unit-initial-approval', 'token'), /失效/)
   assert.equal(sessions.getExtraction('session-b', 'unit-initial-approval'), unitExtraction)
   sessions.bindToPage('new-session', 'unit-initial-approval', 'reopened-page-a')
   assert.throws(() => sessions.getExtraction('new-session', 'unit-initial-approval'), /失效/)
@@ -139,7 +144,10 @@ test('closing the client also prevents unfinished requests from restoring cached
   sessions.bindToPage('session-a', 'unit-initial-approval', 'page-a')
   sessions.clear()
   assert.throws(() => sessions.complete('session-a', 'unit-initial-approval', unitExtraction), /已关闭/)
-  assert.throws(() => sessions.setPending({ sessionId: 'session-a', businessId: 'unit-initial-approval', token: 'token', filePath: 'x.pdf', pageCount: 1 }), /已关闭/)
+  assert.throws(() => sessions.setPending({
+    sessionId: 'session-a', businessId: 'unit-initial-approval', token: 'token',
+    items: [{ id: 'item', filePath: 'x.pdf', fileName: 'x.pdf', status: 'queued', message: 'waiting', pageCount: null, result: null }]
+  }), /已关闭/)
 })
 
 test('goods receipt fixture is isolated from the unit initial approval fixture', () => {
